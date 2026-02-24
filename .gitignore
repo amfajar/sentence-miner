@@ -1,0 +1,55 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environment ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Sensitive / personal data ──────────────────────────────────────────────────
+# Anki cookies (can contain login session)
+cookies.txt
+
+# App settings contain personal paths, deck names, etc.
+settings.json
+
+# ── Dictionary & database files ────────────────────────────────────────────────
+# Large binary files — user imports these themselves
+data/*.zip
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Anki known-words cache
+~/.sentence_miner_cache/
+
+# ── Media & temp files ─────────────────────────────────────────────────────────
+media_temp/
+*.mp3
+*.mp4
+*.mkv
+*.avi
+*.wav
+*.webm
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.srt
+*.ass
+
+# ── Reference / scratch folder ────────────────────────────────────────────────
+referensi_aja/
+
+# ── OS & editor junk ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+*.log

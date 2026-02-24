@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SentenceMiner</title>
+    <meta name="description" content="Automated Japanese sentence mining for Anki">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=4">
+</head>
+
+<body>
+
+    <!-- ══ TITLEBAR ══════════════════════════════════════════════════════════════ -->
+    <header class="titlebar">
+        <div class="app-logo">
+            <div class="app-icon" aria-hidden="true">掘</div>
+            <span class="app-name">SentenceMiner</span>
+        </div>
+        <nav class="nav-tabs" role="navigation" aria-label="Main navigation">
+            <button class="nav-tab active" data-tab="mine" id="tab-btn-mine">Mine</button>
+            <button class="nav-tab" data-tab="settings" id="tab-btn-settings">Settings</button>
+        </nav>
+        <div class="anki-status" id="anki-status" aria-live="polite">
+            <span class="status-dot"></span>
+            <span class="status-text">Initializing…</span>
+        </div>
+    </header>
+
+    <!-- ══ MINE TAB ══════════════════════════════════════════════════════════════ -->
+    <main class="tab-content active" id="tab-mine" role="main">
+
+        <!-- LEFT PANEL -->
+        <aside class="panel-left">
+
+            <!-- Input source selector -->
+            <section class="section">
+                <div class="section-label">INPUT SOURCE</div>
+                <div class="source-tabs" role="group" aria-label="Input type">
+                    <button class="source-btn active" data-source="video" id="src-video">🎬 Video</button>
+                    <button class="source-btn" data-source="youtube" id="src-youtube">▶ YouTube</button>
+                    <button class="source-btn" data-source="epub" id="src-epub">📖 EPUB</button>
+                </div>
+            </section>
+
+            <!-- Video file drop zone -->
+            <section class="section" id="video-section">
+                <div class="drop-zone" id="video-drop" role="button" tabindex="0"
+                    aria-label="Drop video file or click to browse">
+                    <div class="drop-icon" aria-hidden="true">🎥</div>
+                    <div class="drop-title">Drop video file here</div>
+                    <div class="drop-hint">or click to browse (.mkv, .mp4, .avi)</div>
+                </div>
+                <div class="drop-zone sub-drop" id="srt-drop" role="button" tabindex="0"
+                    aria-label="Drop subtitle file or click to browse">
+                    <div class="sub-drop-inner">
+                        <span class="drop-icon-sm" aria-hidden="true">📄</span>
+                        <div>
+                            <div class="drop-title-sm">Drop subtitle file</div>
+                            <div class="drop-hint-sm">(.srt or .ass)</div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Subtitle offset -->
+                <div class="epub-range-row" style="margin-top:10px">
+                    <div class="epub-range-inputs" style="align-items:center;gap:8px">
+                        <span class="freq-label">Subtitle offset</span>
+                        <input type="number" id="sub-offset" class="text-input narrow" value="0" step="0.1"
+                            placeholder="0"
+                            title="Positive = subtitle is late (shift earlier). Negative = subtitle is early (shift later).">
+                        <span class="range-label" style="opacity:0.6">sec</span>
+                    </div>
+                    <div class="hint-text" style="margin-top:4px">Shift subtitle timing. e.g. <code>+1.5</code> if subs
+                        appear 1.5s too late.</div>
+                </div>
+            </section>
+
+            <!-- YouTube URL input -->
+            <section class="section hidden" id="youtube-section">
+                <div class="section-label">YOUTUBE URL</div>
+                <div class="url-input-wrap">
+                    <input type="url" id="yt-url-input" placeholder="https://www.youtube.com/watch?v=..."
+                        class="text-input" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="hint-text">⚠ Video must have <strong>manual Japanese subtitles</strong> from the creator.
+                    Auto-generated subs are not supported.<br>🍪 For age-restricted or members-only videos, place
+                    <code>cookies.txt</code> (Netscape format) in the app folder.
+                </div>
+            </section>
+
+            <!-- EPUB file drop zone -->
+            <section class="section hidden" id="epub-section">
+                <div class="drop-zone" id="epub-drop" role="button" tabindex="0"
+                    aria-label="Drop EPUB file or click to browse">
+                    <div class="drop-icon" aria-hidden="true">📚</div>
+                    <div class="drop-title">Drop EPUB file here</div>
+                    <div class="drop-hint">or click to browse (.epub)</div>
+                </div>
+                <div class="hint-text">Note: EPUB cards have no audio clip or picture.</div>
+                <!-- Character range filter -->
+                <div class="epub-range-row">
+                    <div class="section-label" style="margin-bottom:6px">CHARACTER RANGE</div>
+                    <div class="epub-range-inputs">
+                        <div class="range-field">
+                            <label class="range-label" for="epub-char-start">From</label>
+                            <input type="number" id="epub-char-start" class="text-input narrow" value="0" min="0"
+                                placeholder="0">
+                        </div>
+                        <div class="range-sep">–</div>
+                        <div class="range-field">
+                            <label class="range-label" for="epub-char-end">To</label>
+                            <input type="number" id="epub-char-end" class="text-input narrow" placeholder="end" min="0">
+                        </div>
+                        <button class="test-btn" id="epub-detect-btn" onclick="detectEpubLength()"
+                            title="Auto-detect book length">Detect</button>
+                    </div>
+                    <div class="hint-text" id="epub-char-hint">Leave 'To' empty to mine until the end of the book.</div>
+                </div>
+            </section>
+
+            <!-- Frequency filter -->
+            <section class="section">
+                <div class="section-label">FREQUENCY FILTER</div>
+                <div class="freq-row">
+                    <span class="freq-label">Max rank</span>
+                    <span class="freq-value" id="freq-display">10,000</span>
+                </div>
+                <input type="range" id="freq-slider" min="1000" max="50000" step="1000" value="10000" class="slider"
+                    aria-label="Frequency threshold">
+                <div class="hint-text" id="freq-hint">Mining words ranked 1–10,000 (higher number = more words)</div>
+            </section>
+
+            <!-- Target deck and note type -->
+            <section class="section">
+                <div class="section-label">TARGET DECK</div>
+                <select class="select-input" id="deck-select" aria-label="Anki deck">
+                    <option value="">— connect Anki to load decks —</option>
+                </select>
+            </section>
+
+            <section class="section">
+                <div class="section-label">NOTE TYPE</div>
+                <select class="select-input" id="model-select" aria-label="Anki note type">
+                    <option value="">— connect Anki to load note types —</option>
+                </select>
+            </section>
+
+            <!-- Tags -->
+            <section class="section">
+                <div class="section-label">TAGS</div>
+                <input type="text" id="tags-input" class="text-input" placeholder="sentence-miner anime"
+                    value="sentence-miner" aria-label="Anki tags (space-separated)">
+            </section>
+
+            <!-- Start/Stop + Scan buttons -->
+            <section class="section action-section">
+                <button class="start-btn secondary-btn" id="scan-btn" onclick="handleScan()"
+                    aria-label="Scan and preview vocabulary">
+                    <span class="btn-icon" aria-hidden="true">🔍</span>
+                    <span class="btn-text">Scan</span>
+                </button>
+                <button class="start-btn" id="start-btn" aria-label="Start mining">
+                    <span class="btn-icon" aria-hidden="true">⚡</span>
+                    <span class="btn-text">Start Mining</span>
+                </button>
+            </section>
+
+        </aside>
+
+        <!-- RIGHT PANEL -->
+        <section class="panel-right" aria-label="Progress and log">
+
+            <!-- Error banner -->
+            <div class="error-banner hidden" id="error-banner" role="alert" aria-live="assertive">
+                <span class="error-icon" aria-hidden="true">⚠</span>
+                <span class="error-msg" id="error-msg"></span>
+                <button class="error-close" onclick="dismissError()" aria-label="Dismiss error">✕</button>
+            </div>
+
+            <!-- Stats row -->
+            <div class="stats-row" aria-label="Processing statistics">
+                <div class="stat-card green" aria-label="Cards added">
+                    <div class="stat-number" id="stat-added">0</div>
+                    <div class="stat-label">ADDED</div>
+                </div>
+                <div class="stat-card yellow" aria-label="Words skipped (already known)">
+                    <div class="stat-number" id="stat-known">0</div>
+                    <div class="stat-label">KNOWN</div>
+                </div>
+                <div class="stat-card accent" aria-label="Words skipped (too rare)">
+                    <div class="stat-number" id="stat-freq">0</div>
+                    <div class="stat-label">FREQ SKIP</div>
+                </div>
+            </div>
+
+            <!-- Progress section -->
+            <div class="progress-section" id="progress-section" aria-live="polite">
+
+                <!-- Idle state -->
+                <div class="idle-state" id="idle-state">
+                    <div class="idle-kanji" aria-hidden="true">掘</div>
+                    <div class="idle-title">Ready to mine</div>
+                    <div class="idle-hint">Configure input on the left and click Start Mining</div>
+                </div>
+
+                <!-- Active progress (hidden when idle) -->
+                <div class="active-progress hidden" id="active-progress">
+                    <div class="progress-info">
+                        <span class="progress-word jp-text" id="progress-word">—</span>
+                        <span class="progress-reading jp-text" id="progress-reading"></span>
+                        <span class="progress-count" id="progress-count"></span>
+                    </div>
+                    <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                        aria-valuenow="0" id="progress-bar-track">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Done banner -->
+                <div class="done-banner hidden" id="done-banner" aria-live="polite">
+                    <span class="done-icon" aria-hidden="true">✓</span>
+                    <span class="done-text" id="done-text"></span>
+                </div>
+
+            </div>
+
+            <!-- Log feed -->
+            <div class="log-area" aria-label="Activity log">
+                <div class="log-header">
+                    <span class="log-title">ACTIVITY LOG</span>
+                    <button class="log-clear-btn" onclick="clearLog()" aria-label="Clear log">Clear</button>
+                </div>
+                <div class="log-feed" id="log-feed" role="log" aria-live="polite" aria-label="Mining log"></div>
+            </div>
+
+            <!-- Candidate preview panel (hidden until Scan) -->
+            <div class="preview-panel hidden" id="preview-panel">
+                <div class="preview-header">
+                    <span class="preview-title">VOCABULARY PREVIEW</span>
+                    <div class="preview-actions">
+                        <span class="preview-count" id="preview-count"></span>
+                        <button class="mine-all-btn" id="mine-all-btn" onclick="mineAll()">⚡ Mine All</button>
+                        <button class="log-clear-btn" onclick="hidePreview()">✕ Close</button>
+                    </div>
+                </div>
+                <div class="candidate-list" id="candidate-list"></div>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- ══ SETTINGS TAB ══════════════════════════════════════════════════════════ -->
+    <section class="tab-content" id="tab-settings" aria-label="Settings">
+        <div class="settings-scroll">
+            <div class="settings-container">
+
+                <!-- Anki section -->
+                <div class="settings-group">
+                    <div class="settings-group-title">ANKI</div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-ankiconnect-url">AnkiConnect URL</label>
+                        <div class="settings-field-row">
+                            <input type="text" id="s-ankiconnect-url" class="text-input" value="http://localhost:8765"
+                                autocomplete="off" spellcheck="false">
+                            <button class="test-btn" id="test-anki-btn" onclick="testAnki()">Test</button>
+                        </div>
+                        <div class="test-result hidden" id="test-result"></div>
+                    </div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-note-type">Default Note Type</label>
+                        <input type="text" id="s-note-type" class="text-input" value="Lapis">
+                    </div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-deck-name">Default Deck Name</label>
+                        <input type="text" id="s-deck-name" class="text-input" value="Mining">
+                    </div>
+
+                    <div class="settings-row">
+                        <label class="settings-label">Known Words Cache</label>
+                        <div class="settings-field-row">
+                            <div class="hint-text" style="flex:1">Stores known words from Anki for dedup checks</div>
+                            <button class="test-btn" id="clear-cache-btn" onclick="clearAnkiCache()"
+                                style="min-width:90px">🗑 Clear Cache</button>
+                        </div>
+                        <div class="test-result hidden" id="clear-cache-result"></div>
+                    </div>
+                </div>
+
+                <!-- Dictionary section -->
+                <div class="settings-group">
+                    <div class="settings-group-title">DICTIONARY FILES</div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-jitendex-path">Jitendex</label>
+                        <div class="settings-field-row">
+                            <div class="file-display" id="jitendex-display">Not imported</div>
+                            <button class="browse-btn" onclick="importDictionary('jitendex')"
+                                id="jitendex-btn">Import</button>
+                        </div>
+                        <div class="hint-text">Download from <a href="https://jitendex.org"
+                                class="link">jitendex.org</a> — Yomitan zip format</div>
+                    </div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-freq-path">JPDB Frequency</label>
+                        <div class="settings-field-row">
+                            <div class="file-display" id="freq-display-path">Not imported</div>
+                            <button class="browse-btn" onclick="importDictionary('freq')"
+                                id="freq-dict-btn">Import</button>
+                        </div>
+                        <div class="hint-text">JPDB frequency dictionary in Yomitan zip format</div>
+                    </div>
+                </div>
+
+                <!-- Media section -->
+                <div class="settings-group">
+                    <div class="settings-group-title">MEDIA</div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-padding">Audio Clip Padding (ms)</label>
+                        <input type="number" id="s-padding" class="text-input narrow" value="500" min="0" max="5000"
+                            step="100">
+                    </div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-temp-dir">Temp Folder</label>
+                        <div class="settings-field-row">
+                            <input type="text" id="s-temp-dir" class="text-input" value="./media_temp">
+                        </div>
+                        <div class="hint-text">Temporary files are deleted after upload to Anki</div>
+                    </div>
+                </div>
+
+                <div class="settings-footer">
+                    Settings are saved automatically.
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script src="app.js?v=4"></script>
+</body>
+
+</html>

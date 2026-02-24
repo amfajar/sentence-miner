@@ -1,0 +1,9 @@
+sudachipy>=0.6.8
+sudachidict-full>=20240409
+ebooklib>=0.18
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+lxml>=4.9.0
+srt>=3.5.3
+yt-dlp>=2024.1.0
+pywebview>=4.4.0
