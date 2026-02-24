@@ -37,7 +37,7 @@ A desktop app for **Japanese sentence mining** from anime, YouTube videos, and E
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/yourname/sentence-miner.git
+git clone https://github.com/amfajar/sentence-miner.git
 cd sentence-miner
 ```
 
