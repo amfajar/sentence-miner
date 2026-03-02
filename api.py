@@ -434,48 +434,58 @@ class Api:
             _bt_sent_furi = 0.0; _bt_audio_clip = 0.0; _bt_screenshot = 0.0
             _bt_word_audio = 0.0; _bt_upload = 0.0
             
-            # Pre-fetch existing media starting with "sm_" to skip re-uploads
+            # 1. Fetch Anki's collection.media path (for direct file writing)
+            # 2. Fetch existing media starting with "sm_" to skip re-extractions
             existing_media = set()
+            media_dir = None
             try:
+                media_dir_res = anki._request(s.ankiconnect_url, 'getMediaDirPath')
+                if media_dir_res and os.path.exists(media_dir_res):
+                    media_dir = media_dir_res
                 msg = anki._request(s.ankiconnect_url, 'getMediaFilesNames', pattern='sm_*')
                 if msg: existing_media = set(msg)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[api] AnkiConnect pre-flight checks failed: {e}")
 
-            # ── Phase 1: Build + Extract + Concurrent Upload ────────────────
-            # ffmpeg extracts files and puts them in an upload queue.
-            # 24 background threads consume the queue and upload to Anki immediately.
+            # Fallback for old AnkiConnect versions that don't support getMediaDirPath
+            use_direct_write = bool(media_dir)
+            if use_direct_write:
+                print(f"[perf] Anki media dir: {media_dir}")
+            else:
+                print(f"[perf] Anki media dir not found! Falling back to HTTP uploads.")
+
+            # ── Phase 1: Build + Extract ────────────────────────────────────
             pending: list[tuple[str, str, int, dict]] = []  # (lemma, reading, rank, fields)
-            upload_queue = queue.Queue()
             
-            def _upload_worker():
-                while True:
-                    item = upload_queue.get()
-                    if item is None:
-                        upload_queue.task_done()
-                        break
-                    local_path, fields_ref, field_key, target_name = item
-                    try:
-                        size_kb = os.path.getsize(local_path) // 1024
-                        _t = time.perf_counter()
-                        # Pass custom filename to upload_media to ensure it saves as target_name
-                        stored_name = anki.upload_media(s.ankiconnect_url, local_path, target_name)
-                        elapsed_ms = (time.perf_counter() - _t) * 1000
-                        print(f'[perf] Upload "{target_name}": {size_kb}KB → {elapsed_ms:.0f}ms')
-                        
-                        if field_key in ('SentenceAudio', 'ExpressionAudio'):
-                            fields_ref[field_key] = f'[sound:{stored_name}]'
-                        elif field_key == 'Picture':
-                            fields_ref[field_key] = f"<img src='{stored_name}'>"
-                    except Exception as e:
-                        print(f'[api] Upload error ({target_name}): {e}')
-                    finally:
-                        upload_queue.task_done()
+            # Only used if fallback to HTTP uploads is active
+            upload_queue = queue.Queue()
+            pool = None
+            if not use_direct_write:
+                def _upload_worker():
+                    while True:
+                        item = upload_queue.get()
+                        if item is None:
+                            upload_queue.task_done()
+                            break
+                        local_path, fields_ref, field_key, target_name = item
+                        try:
+                            _t = time.perf_counter()
+                            stored_name = anki.upload_media(s.ankiconnect_url, local_path, target_name)
+                            if field_key in ('SentenceAudio', 'ExpressionAudio'):
+                                fields_ref[field_key] = f'[sound:{stored_name}]'
+                            elif field_key == 'Picture':
+                                fields_ref[field_key] = f"<img src='{stored_name}'>"
+                        except Exception as e:
+                            print(f'[api] Upload error ({target_name}): {e}')
+                        finally:
+                            upload_queue.task_done()
 
-            # Start upload workers
-            pool = ThreadPoolExecutor(max_workers=24)
-            for _ in range(24):
-                pool.submit(_upload_worker)
+                pool = ThreadPoolExecutor(max_workers=8)
+                for _ in range(8):
+                    pool.submit(_upload_worker)
+                
+            extract_pool = ThreadPoolExecutor(max_workers=8)
+            extract_futs = []
 
             push({'type': 'status', 'msg': f'Building {total} cards...'})
 
@@ -545,9 +555,8 @@ class Api:
                     'MiscInfo': source_name,
                 }
 
-                # Media: extract files now (CPU-bound), send to upload queue
+                # Media: extract files now (CPU-bound)
                 if input_type in ('media', 'youtube') and occ['start_ms'] is not None:
-                    # Deterministic UUID based on media source and timestamp
                     uid_str = f"{media_path}_{occ['start_ms']}_{occ['end_ms']}"
                     uid = hashlib.md5(uid_str.encode('utf-8')).hexdigest()[:8]
                     
@@ -556,14 +565,23 @@ class Api:
                         if clip_name in existing_media:
                             fields['SentenceAudio'] = f"[sound:{clip_name}]"
                         else:
-                            _t0 = time.perf_counter()
-                            clip_path = os.path.join(s.temp_dir, clip_name)
-                            media.extract_audio_clip(
-                                media_path, occ['start_ms'], occ['end_ms'],
-                                clip_path, s.clip_padding_ms, media_duration_ms,
-                            )
-                            _bt_audio_clip += (time.perf_counter() - _t0) * 1000
-                            upload_queue.put((clip_path, fields, 'SentenceAudio', clip_name))
+                            extract_dest = media_dir if use_direct_write else s.temp_dir
+                            clip_path = os.path.join(extract_dest, clip_name)
+                            
+                            def _do_audio(mp, start, end, cp, pad, dur, flds, cname, direct):
+                                _t = time.perf_counter()
+                                media.extract_audio_clip(mp, start, end, cp, pad, dur)
+                                el = (time.perf_counter() - _t) * 1000
+                                if direct:
+                                    flds['SentenceAudio'] = f"[sound:{cname}]"
+                                else:
+                                    upload_queue.put((cp, flds, 'SentenceAudio', cname))
+                                return ('audio', el)
+                                
+                            extract_futs.append(extract_pool.submit(
+                                _do_audio, media_path, occ['start_ms'], occ['end_ms'], 
+                                clip_path, s.clip_padding_ms, media_duration_ms, fields, clip_name, use_direct_write
+                            ))
                     except Exception as e:
                         print(f"[api] Audio clip error for {lemma}: {e}")
 
@@ -573,11 +591,23 @@ class Api:
                             if frame_name in existing_media:
                                 fields['Picture'] = f"<img src='{frame_name}'>"
                             else:
-                                _t0 = time.perf_counter()
-                                frame_path = os.path.join(s.temp_dir, frame_name)
-                                media.extract_frame(media_path, occ['start_ms'], occ['end_ms'], frame_path)
-                                _bt_screenshot += (time.perf_counter() - _t0) * 1000
-                                upload_queue.put((frame_path, fields, 'Picture', frame_name))
+                                extract_dest = media_dir if use_direct_write else s.temp_dir
+                                frame_path = os.path.join(extract_dest, frame_name)
+                                
+                                def _do_frame(mp, start, end, fp, flds, cname, direct):
+                                    _t = time.perf_counter()
+                                    media.extract_frame(mp, start, end, fp)
+                                    el = (time.perf_counter() - _t) * 1000
+                                    if direct:
+                                        flds['Picture'] = f"<img src='{cname}'>"
+                                    else:
+                                        upload_queue.put((fp, flds, 'Picture', cname))
+                                    return ('frame', el)
+                                    
+                                extract_futs.append(extract_pool.submit(
+                                    _do_frame, media_path, occ['start_ms'], occ['end_ms'], 
+                                    frame_path, fields, frame_name, use_direct_write
+                                ))
                         except Exception as e:
                             print(f"[api] Frame error for {lemma}: {e}")
 
@@ -590,36 +620,64 @@ class Api:
                         if audio_name in existing_media:
                             fields['ExpressionAudio'] = f"[sound:{audio_name}]"
                         else:
-                            _t0 = time.perf_counter()
-                            audio_path = audio_sources.fetch_word_audio(lemma, token['reading'], s.temp_dir)
-                            _bt_word_audio += (time.perf_counter() - _t0) * 1000
-                            if audio_path:
-                                # rename the downloaded file to target name
-                                new_path = os.path.join(s.temp_dir, audio_name)
-                                os.rename(audio_path, new_path)
-                                upload_queue.put((new_path, fields, 'ExpressionAudio', audio_name))
+                            def _do_word_audio(lm, rdg, tmp_dir, target_name, flds, direct):
+                                _t = time.perf_counter()
+                                a_path = audio_sources.fetch_word_audio(lm, rdg, tmp_dir)
+                                el = (time.perf_counter() - _t) * 1000
+                                if a_path:
+                                    if direct:
+                                        # Move from temp to Anki collection.media immediately
+                                        n_path = os.path.join(media_dir, target_name)
+                                        # Use replace or copyfile to handle cross-drive moves
+                                        import shutil
+                                        shutil.move(a_path, n_path)
+                                        flds['ExpressionAudio'] = f"[sound:{target_name}]"
+                                    else:
+                                        n_path = os.path.join(tmp_dir, target_name)
+                                        import shutil
+                                        shutil.move(a_path, n_path)
+                                        upload_queue.put((n_path, flds, 'ExpressionAudio', target_name))
+                                return ('word_audio', el)
+                                
+                            extract_futs.append(extract_pool.submit(
+                                _do_word_audio, lemma, token['reading'], s.temp_dir, audio_name, fields, use_direct_write
+                            ))
                     except Exception as e:
                         print(f"[api] Word audio error for {lemma}: {e}")
 
                 pending.append((lemma, jitendex_word_reading, rank, fields))
             
-            # Close the extraction loop
-            # Send stop signals to workers and wait for queue to empty
-            for _ in range(24):
-                upload_queue.put(None)
-            
-            _t0 = time.perf_counter()
-            upload_queue.join()  # blocks until all items are processed by workers
-            pool.shutdown(wait=True)
-            _bt_upload = (time.perf_counter() - _t0) * 1000
+            # Wait for all ffmpeg extractions and HTTP audio fetches to finish
+            for fut in extract_futs:
+                try:
+                    resType, elapsed = fut.result()
+                    if resType == 'audio': _bt_audio_clip += elapsed
+                    elif resType == 'frame': _bt_screenshot += elapsed
+                    elif resType == 'word_audio': _bt_word_audio += elapsed
+                except Exception as e:
+                    print(f"[api] Background extraction failed: {e}")
+            extract_pool.shutdown()
+
+            # Close the upload loop (only if fallback mode)
+            if not use_direct_write and pool is not None:
+                for _ in range(8):
+                    upload_queue.put(None)
+                _t0 = time.perf_counter()
+                upload_queue.join()
+                pool.shutdown(wait=True)
+                _bt_upload = (time.perf_counter() - _t0) * 1000
 
             t_extract_ms = (time.perf_counter() - t_batch_start) * 1000
             print(f'[perf] ── Extract & Upload phase ({len(pending)} notes) ──')
             print(f'[perf]    Sentence furigana (all):           {_bt_sent_furi:.0f}ms')
-            print(f'[perf]    Audio clip ffmpeg (all):           {_bt_audio_clip:.0f}ms')
-            print(f'[perf]    Screenshot ffmpeg (all):           {_bt_screenshot:.0f}ms')
+            if use_direct_write:
+                print(f'[perf]    Audio clip ffmpeg (direct):        {_bt_audio_clip:.0f}ms')
+                print(f'[perf]    Screenshot ffmpeg (direct):        {_bt_screenshot:.0f}ms')
+            else:
+                print(f'[perf]    Audio clip ffmpeg (HTTP):          {_bt_audio_clip:.0f}ms')
+                print(f'[perf]    Screenshot ffmpeg (HTTP):          {_bt_screenshot:.0f}ms')
+                print(f'[perf]    Trailing upload wait:              {_bt_upload:.0f}ms')
             print(f'[perf]    Word audio HTTP (all):             {_bt_word_audio:.0f}ms')
-            print(f'[perf]    Trailing upload wait:              {_bt_upload:.0f}ms')
             print(f'[perf]    Phase total:                       {t_extract_ms:.0f}ms')
 
             # ── Phase 2: Batch addNotes — ONE HTTP call for everything ──────
