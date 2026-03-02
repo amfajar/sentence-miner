@@ -432,20 +432,31 @@ class Api:
 
             t_batch_start = time.perf_counter()
             _bt_sent_furi = 0.0; _bt_audio_clip = 0.0; _bt_screenshot = 0.0
-            _bt_word_audio = 0.0; _bt_upload = 0.0
+            _bt_word_audio = 0.0; _bt_upload = 0.0; _bt_dict_lookup = 0.0; _bt_dedup = 0.0
             
             # 1. Fetch Anki's collection.media path (for direct file writing)
             # 2. Fetch existing media starting with "sm_" to skip re-extractions
+            _t0 = time.perf_counter()
             existing_media = set()
             media_dir = None
-            try:
-                media_dir_res = anki._request(s.ankiconnect_url, 'getMediaDirPath')
-                if media_dir_res and os.path.exists(media_dir_res):
-                    media_dir = media_dir_res
-                msg = anki._request(s.ankiconnect_url, 'getMediaFilesNames', pattern='sm_*')
-                if msg: existing_media = set(msg)
-            except Exception as e:
-                print(f"[api] AnkiConnect pre-flight checks failed: {e}")
+            
+            # If we don't need ANY media, skip connecting to Anki for media
+            needs_media = input_type in ('media', 'youtube') or s.use_word_audio
+            if needs_media:
+                try:
+                    media_dir_res = anki._request(s.ankiconnect_url, 'getMediaDirPath')
+                    if media_dir_res and os.path.exists(media_dir_res):
+                        media_dir = media_dir_res
+                        # Use lightning fast os.listdir if we have the directory
+                        existing_media = set(f for f in os.listdir(media_dir) if f.startswith('sm_') or f.startswith('yomi_'))
+                    else:
+                        # Fallback for old AnkiConnect versions
+                        msg = anki._request(s.ankiconnect_url, 'getMediaFilesNames', pattern='sm_*')
+                        if msg: existing_media = set(msg)
+                except Exception as e:
+                    print(f"[api] AnkiConnect pre-flight checks failed: {e}")
+            
+            _bt_media_init = (time.perf_counter() - _t0) * 1000
 
             # Fallback for old AnkiConnect versions that don't support getMediaDirPath
             use_direct_write = bool(media_dir)
@@ -510,7 +521,10 @@ class Api:
                 rank = occ['rank']
 
                 # Cross-deck dedup: skip if already known
-                if not s.allow_duplicates and lemma in self._known_words:
+                _t0 = time.perf_counter()
+                is_dup = not s.allow_duplicates and lemma in self._known_words
+                _bt_dedup += (time.perf_counter() - _t0) * 1000
+                if is_dup:
                     skipped_known += 1
                     push({'type': 'log', 'badge': 'skip', 'word': lemma,
                           'reading': token['reading'], 'detail': 'already in Anki'})
@@ -525,10 +539,12 @@ class Api:
                 )
                 _bt_sent_furi += (time.perf_counter() - _t0) * 1000
 
+                _t0 = time.perf_counter()
                 jitendex_word_reading = _best_reading(
                     self._jitendex, self._freq_dict, lemma, token['reading']
                 )
                 defn = dictionary.lookup_for_reading(self._jitendex, lemma, jitendex_word_reading) or ''
+                _bt_dict_lookup += (time.perf_counter() - _t0) * 1000
 
                 fields = {
                     'Expression': lemma,
@@ -659,6 +675,9 @@ class Api:
 
             t_extract_ms = (time.perf_counter() - t_batch_start) * 1000
             print(f'[perf] ── Extract & Upload phase ({len(pending)} notes) ──')
+            print(f'[perf]    Media Init (Anki API/dir):         {_bt_media_init:.0f}ms')
+            print(f'[perf]    Duplicate check (set):             {_bt_dedup:.0f}ms')
+            print(f'[perf]    Dictionary lookups (all):          {_bt_dict_lookup:.0f}ms')
             print(f'[perf]    Sentence furigana (all):           {_bt_sent_furi:.0f}ms')
             if use_direct_write:
                 print(f'[perf]    Combined ffmpeg extract (direct):  {_bt_audio_clip:.0f}ms')

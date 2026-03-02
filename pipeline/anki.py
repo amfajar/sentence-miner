@@ -52,18 +52,19 @@ def _load_cache() -> tuple[set[str], int, int]:
     Returns (expressions_set, cached_note_count, max_note_id).
     max_note_id is used for incremental refresh (only fetch notes with id > this).
     """
+def _load_cache() -> tuple[set[str], int, int]:
     try:
         if not os.path.exists(_CACHE_FILE):
             return set(), 0, 0
         age = time.time() - os.path.getmtime(_CACHE_FILE)
-        if age > _CACHE_MAX_AGE_SECS:
-            print(f'[anki] Cache expired ({age/3600:.1f}h old), will refresh in background.')
         with open(_CACHE_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
         words = set(data.get('words', []))
         count = data.get('note_count', 0)
         max_id = data.get('max_note_id', 0)
-        print(f'[anki] Loaded {len(words):,} known words from cache (note_count={count:,}).')
+        print(f'[anki] Cache file found: {len(words):,} words, note_count={count:,}, age={age:.1f}s')
+        if age > _CACHE_MAX_AGE_SECS:
+            print(f'[anki] Cache expired (>{_CACHE_MAX_AGE_SECS/3600:.1f}h old), will refresh in background.')
         return words, count, max_id
     except Exception as e:
         print(f'[anki] Cache load failed: {e}')
@@ -131,11 +132,11 @@ def _fetch_expressions_for_type(
                     words.add(val)
 
         max_id = max(note_ids) if note_ids else 0
-        return words, max_id
+        return words, max_id, len(note_ids)
 
     except Exception as e:
         print(f'[anki] Fetch failed for \'{note_type}\': {e}')
-        return set(), 0
+        return set(), 0, 0
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -180,6 +181,7 @@ def get_all_known_expressions(
     targets: list | None = None,
     incremental_ids: dict[str, list[int]] | None = None,
     base_words: set[str] | None = None,
+    total_count: int | None = None,
 ) -> tuple[set[str], int]:
     """
     Fetch known expressions from Anki note types.
@@ -206,12 +208,13 @@ def get_all_known_expressions(
         global_max_id = 0
 
         # ── Parallel fetch: one thread per note type ─────────────────────────
-        per_type_results: dict[str, tuple[set[str], int]] = {}
+        per_type_results: dict[str, tuple[set[str], int, int]] = {}
         threads = []
+        total_fetched_notes = 0
 
         def _run(note_type, field_name, only_ids):
-            words, mid = _fetch_expressions_for_type(url, note_type, field_name, only_ids)
-            per_type_results[note_type] = (words, mid)
+            words, mid, count = _fetch_expressions_for_type(url, note_type, field_name, only_ids)
+            per_type_results[note_type] = (words, mid, count)
 
         for note_type, field_name in targets:
             only_ids = (incremental_ids or {}).get(note_type)
@@ -223,13 +226,14 @@ def get_all_known_expressions(
             t.join()
 
         # ── Merge results ────────────────────────────────────────────────────
-        for note_type, (words, mid) in per_type_results.items():
+        for note_type, (words, mid, count) in per_type_results.items():
             expressions.update(words)
-            total_notes += len(words)
+            total_fetched_notes += count
             global_max_id = max(global_max_id, mid)
 
-        print(f'[anki] Loaded {len(expressions):,} known expressions from {total_notes:,} notes.')
-        _save_cache(expressions, total_notes, global_max_id)
+        final_count = total_count if total_count is not None else total_fetched_notes
+        print(f'[anki] Loaded {len(expressions):,} known expressions from {final_count:,} notes.')
+        _save_cache(expressions, final_count, global_max_id)
         return expressions, global_max_id
 
 
@@ -292,6 +296,7 @@ def get_known_expressions_fast(url: str, targets: list | None = None,
                     url, targets=_targets,
                     incremental_ids=incremental_ids,
                     base_words=cached_words,
+                    total_count=current_count,
                 )
             else:
                 # ── Full refresh ─────────────────────────────────────────────
