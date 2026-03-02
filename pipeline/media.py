@@ -119,3 +119,63 @@ def extract_frame(
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg frame extract failed: {e.stderr.decode()}")
     return output_path
+
+
+def extract_media(
+    media_path: str,
+    start_ms: int,
+    end_ms: int,
+    audio_output_path: str | None,
+    frame_output_path: str | None,
+    padding_ms: int = 0,
+    duration_ms: int | None = None
+) -> None:
+    """
+    Extract audio clip and/or a single frame from a video file in a single ffmpeg call.
+    """
+    if not audio_output_path and not frame_output_path:
+        return
+
+    if not duration_ms:
+        duration_ms = get_media_duration_ms(media_path)
+
+    padded_start = max(0, start_ms - padding_ms)
+    padded_end = end_ms + padding_ms
+    if duration_ms > 0:
+        padded_end = min(padded_end, duration_ms)
+
+    start_s = padded_start / 1000.0
+    duration_s = (padded_end - padded_start) / 1000.0
+
+    cmd = [
+        'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+        '-ss', f'{start_s:.3f}',
+        '-i', media_path
+    ]
+
+    if audio_output_path:
+        os.makedirs(os.path.dirname(os.path.abspath(audio_output_path)), exist_ok=True)
+        cmd.extend([
+            '-map', '0:a?',
+            '-t', f'{duration_s:.3f}',
+            '-acodec', 'libmp3lame',
+            '-q:a', '5',
+            audio_output_path
+        ])
+
+    if frame_output_path:
+        os.makedirs(os.path.dirname(os.path.abspath(frame_output_path)), exist_ok=True)
+        frame_offset_s = max(0, (start_ms - padded_start)) / 1000.0
+        cmd.extend([
+            '-map', '0:v?',
+            '-ss', f'{frame_offset_s:.3f}',
+            '-vframes', '1',
+            '-vf', 'scale=min(960\\,iw):-2',
+            '-q:v', '5',
+            frame_output_path
+        ])
+
+    try:
+        subprocess.run(cmd, capture_output=True, check=True, timeout=60)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffmpeg combined extract failed: {e.stderr.decode()}")

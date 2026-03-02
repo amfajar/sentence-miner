@@ -562,54 +562,45 @@ class Api:
                     
                     try:
                         clip_name = f"sm_{lemma}_{uid}_clip.mp3"
-                        if clip_name in existing_media:
+                        clip_path = os.path.join(media_dir if use_direct_write else s.temp_dir, clip_name)
+                        clip_exists = clip_name in existing_media
+                        if clip_exists:
                             fields['SentenceAudio'] = f"[sound:{clip_name}]"
-                        else:
-                            extract_dest = media_dir if use_direct_write else s.temp_dir
-                            clip_path = os.path.join(extract_dest, clip_name)
                             
-                            def _do_audio(mp, start, end, cp, pad, dur, flds, cname, direct):
+                        frame_name = f"sm_{lemma}_{uid}_frame.jpg"
+                        frame_path = os.path.join(media_dir if use_direct_write else s.temp_dir, frame_name)
+                        frame_exists = frame_name in existing_media
+                        if not audio_only and frame_exists:
+                            fields['Picture'] = f"<img src='{frame_name}'>"
+
+                        do_audio = not clip_exists
+                        do_frame = not audio_only and not frame_exists
+                        
+                        if do_audio or do_frame:
+                            def _do_media(mp, start, end, ap, anam, fp, fnam, flds, direct):
                                 _t = time.perf_counter()
-                                media.extract_audio_clip(mp, start, end, cp, pad, dur)
+                                media.extract_media(mp, start, end, ap, fp, s.clip_padding_ms, media_duration_ms)
                                 el = (time.perf_counter() - _t) * 1000
-                                if direct:
-                                    flds['SentenceAudio'] = f"[sound:{cname}]"
-                                else:
-                                    upload_queue.put((cp, flds, 'SentenceAudio', cname))
-                                return ('audio', el)
+                                if ap:
+                                    if direct:
+                                        flds['SentenceAudio'] = f"[sound:{anam}]"
+                                    else:
+                                        upload_queue.put((ap, flds, 'SentenceAudio', anam))
+                                if fp:
+                                    if direct:
+                                        flds['Picture'] = f"<img src='{fnam}'>"
+                                    else:
+                                        upload_queue.put((fp, flds, 'Picture', fnam))
+                                return ('media', el)
                                 
                             extract_futs.append(extract_pool.submit(
-                                _do_audio, media_path, occ['start_ms'], occ['end_ms'], 
-                                clip_path, s.clip_padding_ms, media_duration_ms, fields, clip_name, use_direct_write
+                                _do_media, media_path, occ['start_ms'], occ['end_ms'],
+                                clip_path if do_audio else None, clip_name,
+                                frame_path if do_frame else None, frame_name,
+                                fields, use_direct_write
                             ))
                     except Exception as e:
-                        print(f"[api] Audio clip error for {lemma}: {e}")
-
-                    if not audio_only:
-                        try:
-                            frame_name = f"sm_{lemma}_{uid}_frame.jpg"
-                            if frame_name in existing_media:
-                                fields['Picture'] = f"<img src='{frame_name}'>"
-                            else:
-                                extract_dest = media_dir if use_direct_write else s.temp_dir
-                                frame_path = os.path.join(extract_dest, frame_name)
-                                
-                                def _do_frame(mp, start, end, fp, flds, cname, direct):
-                                    _t = time.perf_counter()
-                                    media.extract_frame(mp, start, end, fp)
-                                    el = (time.perf_counter() - _t) * 1000
-                                    if direct:
-                                        flds['Picture'] = f"<img src='{cname}'>"
-                                    else:
-                                        upload_queue.put((fp, flds, 'Picture', cname))
-                                    return ('frame', el)
-                                    
-                                extract_futs.append(extract_pool.submit(
-                                    _do_frame, media_path, occ['start_ms'], occ['end_ms'], 
-                                    frame_path, fields, frame_name, use_direct_write
-                                ))
-                        except Exception as e:
-                            print(f"[api] Frame error for {lemma}: {e}")
+                        print(f"[api] Media extract error for {lemma}: {e}")
 
                 # Word audio
                 if s.use_word_audio:
@@ -651,8 +642,7 @@ class Api:
             for fut in extract_futs:
                 try:
                     resType, elapsed = fut.result()
-                    if resType == 'audio': _bt_audio_clip += elapsed
-                    elif resType == 'frame': _bt_screenshot += elapsed
+                    if resType == 'media': _bt_audio_clip += elapsed
                     elif resType == 'word_audio': _bt_word_audio += elapsed
                 except Exception as e:
                     print(f"[api] Background extraction failed: {e}")
@@ -671,11 +661,9 @@ class Api:
             print(f'[perf] ── Extract & Upload phase ({len(pending)} notes) ──')
             print(f'[perf]    Sentence furigana (all):           {_bt_sent_furi:.0f}ms')
             if use_direct_write:
-                print(f'[perf]    Audio clip ffmpeg (direct):        {_bt_audio_clip:.0f}ms')
-                print(f'[perf]    Screenshot ffmpeg (direct):        {_bt_screenshot:.0f}ms')
+                print(f'[perf]    Combined ffmpeg extract (direct):  {_bt_audio_clip:.0f}ms')
             else:
-                print(f'[perf]    Audio clip ffmpeg (HTTP):          {_bt_audio_clip:.0f}ms')
-                print(f'[perf]    Screenshot ffmpeg (HTTP):          {_bt_screenshot:.0f}ms')
+                print(f'[perf]    Combined ffmpeg extract (temp):    {_bt_audio_clip:.0f}ms')
                 print(f'[perf]    Trailing upload wait:              {_bt_upload:.0f}ms')
             print(f'[perf]    Word audio HTTP (all):             {_bt_word_audio:.0f}ms')
             print(f'[perf]    Phase total:                       {t_extract_ms:.0f}ms')
