@@ -464,7 +464,7 @@ class Api:
             media_dir = None
             
             # If we don't need ANY media, skip connecting to Anki for media
-            needs_media = input_type in ('media', 'youtube') or s.use_word_audio
+            needs_media = input_type in ('media', 'youtube', 'batch') or s.use_word_audio
             if needs_media:
                 try:
                     media_dir_res = anki._request(s.ankiconnect_url, 'getMediaDirPath')
@@ -737,7 +737,7 @@ class Api:
             ]
             
             note_ids = []
-            BATCH_CHUNK_SIZE = 50
+            BATCH_CHUNK_SIZE = 100
             total_chunks = (len(note_dicts) + BATCH_CHUNK_SIZE - 1) // BATCH_CHUNK_SIZE
             _dt_batch_total = 0
             
