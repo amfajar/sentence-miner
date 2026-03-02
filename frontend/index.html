@@ -10,7 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=4">
+    <link rel="stylesheet" href="style.css?v=5">
 </head>
 
 <body>
@@ -41,19 +41,19 @@
             <section class="section">
                 <div class="section-label">INPUT SOURCE</div>
                 <div class="source-tabs" role="group" aria-label="Input type">
-                    <button class="source-btn active" data-source="video" id="src-video">🎬 Video</button>
+                    <button class="source-btn active" data-source="media" id="src-media">🎵 Media</button>
                     <button class="source-btn" data-source="youtube" id="src-youtube">▶ YouTube</button>
-                    <button class="source-btn" data-source="epub" id="src-epub">📖 EPUB</button>
+                    <button class="source-btn" data-source="epub" id="src-epub">📖 EPUB/TXT</button>
                 </div>
             </section>
 
-            <!-- Video file drop zone -->
-            <section class="section" id="video-section">
-                <div class="drop-zone" id="video-drop" role="button" tabindex="0"
-                    aria-label="Drop video file or click to browse">
-                    <div class="drop-icon" aria-hidden="true">🎥</div>
-                    <div class="drop-title">Drop video file here</div>
-                    <div class="drop-hint">or click to browse (.mkv, .mp4, .avi)</div>
+            <!-- Media file drop zone (video + audio) -->
+            <section class="section" id="media-section">
+                <div class="drop-zone" id="media-drop" role="button" tabindex="0"
+                    aria-label="Drop media file or click to browse">
+                    <div class="drop-icon" aria-hidden="true">🎵</div>
+                    <div class="drop-title">Drop media file here</div>
+                    <div class="drop-hint">or click to browse (.mp4 .mkv .avi .mp3 .wav .m4a .ogg .flac …)</div>
                 </div>
                 <div class="drop-zone sub-drop" id="srt-drop" role="button" tabindex="0"
                     aria-label="Drop subtitle file or click to browse">
@@ -65,6 +65,7 @@
                         </div>
                     </div>
                 </div>
+                <div class="media-audio-hint hint-text" id="media-type-hint" style="margin-top:6px"></div>
                 <!-- Subtitle offset -->
                 <div class="epub-range-row" style="margin-top:10px">
                     <div class="epub-range-inputs" style="align-items:center;gap:8px">
@@ -92,15 +93,15 @@
                 </div>
             </section>
 
-            <!-- EPUB file drop zone -->
+            <!-- EPUB / TXT file drop zone -->
             <section class="section hidden" id="epub-section">
                 <div class="drop-zone" id="epub-drop" role="button" tabindex="0"
-                    aria-label="Drop EPUB file or click to browse">
+                    aria-label="Drop EPUB or TXT file or click to browse">
                     <div class="drop-icon" aria-hidden="true">📚</div>
-                    <div class="drop-title">Drop EPUB file here</div>
-                    <div class="drop-hint">or click to browse (.epub)</div>
+                    <div class="drop-title">Drop EPUB or TXT file here</div>
+                    <div class="drop-hint">or click to browse (.epub, .txt)</div>
                 </div>
-                <div class="hint-text">Note: EPUB cards have no audio clip or picture.</div>
+                <div class="hint-text">Note: EPUB/TXT cards have no audio clip or picture.</div>
                 <!-- Character range filter -->
                 <div class="epub-range-row">
                     <div class="section-label" style="margin-bottom:6px">CHARACTER RANGE</div>
@@ -140,6 +141,13 @@
                 <select class="select-input" id="deck-select" aria-label="Anki deck">
                     <option value="">— connect Anki to load decks —</option>
                 </select>
+                <!-- Create new deck -->
+                <div class="new-deck-row" id="new-deck-row">
+                    <input type="text" id="new-deck-input" class="text-input new-deck-input"
+                        placeholder="New deck name…" autocomplete="off">
+                    <button class="test-btn" id="new-deck-btn" onclick="createDeck()">Create</button>
+                </div>
+                <div class="test-result hidden" id="new-deck-result"></div>
             </section>
 
             <section class="section">
@@ -154,6 +162,32 @@
                 <div class="section-label">TAGS</div>
                 <input type="text" id="tags-input" class="text-input" placeholder="sentence-miner anime"
                     value="sentence-miner" aria-label="Anki tags (space-separated)">
+            </section>
+
+            <!-- Toggles -->
+            <section class="section">
+                <div class="section-label">OPTIONS</div>
+                <!-- Word Audio toggle -->
+                <div class="toggle-row" title="Fetch pronunciation audio for each word (JPod101/JapanesePod)">
+                    <span class="toggle-desc">Word Audio</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-word-audio" checked>
+                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                </div>
+                <!-- Allow Duplicates toggle -->
+                <div class="toggle-row"
+                    title="ON = mine words that already exist in OTHER decks. Words in the current deck are still deduplicated.">
+                    <span class="toggle-desc">Allow Duplicates</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-allow-dupes">
+                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                </div>
+                <div class="hint-text" style="margin-top:6px">
+                    <b>Word Audio OFF</b> — skip JPod audio fetch.<br>
+                    <b>Allow Duplicates ON</b> — include words already in other decks.
+                </div>
             </section>
 
             <!-- Start/Stop + Scan buttons -->
@@ -346,7 +380,7 @@
         </div>
     </section>
 
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
 </body>
 
 </html>

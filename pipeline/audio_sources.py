@@ -82,12 +82,6 @@ def fetch_word_audio(lemma: str, reading: str, temp_dir: str) -> str | None:
             'url': f"https://assets.languagepod101.com/dictionary/japanese/audiomp3.php?kana={urllib.parse.quote(reading)}",
             'ext': 'mp3'
         },
-        # Source 3: Jisho API
-        {
-            'name': 'jisho',
-            'url': f"https://apps.jisho.org/api/v1/audio/{urllib.parse.quote(reading)}",
-            'ext': 'mp3'
-        }
     ]
 
     for source in sources:

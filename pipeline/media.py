@@ -1,19 +1,32 @@
 """
 ffmpeg / ffprobe wrappers for audio clip and frame extraction.
 ffmpeg must be in PATH.
+
+Supports both video files and audio-only files (mp3, wav, m4a, ogg, flac, aac, etc.).
+Audio-only files: extract_audio_clip works normally; extract_frame will raise (not applicable).
 """
 
-import subprocess
 import os
+import subprocess
 
 
-def get_video_duration_ms(video_path: str) -> int:
-    """Use ffprobe to get video duration in milliseconds."""
+# Extensions treated as audio-only (no video stream)
+_AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.opus', '.wma'}
+
+
+def is_audio_only(path: str) -> bool:
+    """Return True if the file is an audio-only format (no video stream expected)."""
+    ext = os.path.splitext(path)[1].lower()
+    return ext in _AUDIO_EXTENSIONS
+
+
+def get_media_duration_ms(media_path: str) -> int:
+    """Use ffprobe to get media duration in milliseconds (works for audio and video)."""
     cmd = [
         'ffprobe', '-v', 'quiet',
         '-show_entries', 'format=duration',
         '-of', 'csv=p=0',
-        video_path
+        media_path
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -24,19 +37,28 @@ def get_video_duration_ms(video_path: str) -> int:
         return 0
 
 
+# Legacy alias
+def get_video_duration_ms(video_path: str) -> int:
+    return get_media_duration_ms(video_path)
+
+
 def extract_audio_clip(
-    video_path: str,
+    media_path: str,
     start_ms: int,
     end_ms: int,
     output_path: str,
     padding_ms: int = 500,
+    duration_ms: int = 0,
 ) -> str:
     """
-    Cut audio from video between (start_ms - padding) and (end_ms + padding).
-    Clamps to [0, video_duration].
+    Cut audio from media (video or audio file) between (start_ms - padding) and (end_ms + padding).
+    Clamps to [0, duration]. Works for both video and audio-only source files.
+
+    duration_ms: if non-zero, use this instead of calling ffprobe (for pre-cached duration).
     Returns output_path on success.
     """
-    duration_ms = get_video_duration_ms(video_path)
+    if not duration_ms:
+        duration_ms = get_media_duration_ms(media_path)
 
     padded_start = max(0, start_ms - padding_ms)
     padded_end = end_ms + padding_ms
@@ -52,12 +74,11 @@ def extract_audio_clip(
         'ffmpeg',
         '-ss', f'{start_s:.3f}',
         '-to', f'{end_s:.3f}',
-        '-i', video_path,
-        '-vn',
+        '-i', media_path,
+        '-vn',                    # no video stream
         '-acodec', 'libmp3lame',
-        '-q:a', '3',
-        output_path,
-        '-y',
+        '-q:a', '5',              # VBR ~130kbps — smaller than q:a 3, still great quality
+        output_path, '-y',
     ]
     try:
         subprocess.run(cmd, capture_output=True, check=True, timeout=60)
@@ -74,8 +95,12 @@ def extract_frame(
 ) -> str:
     """
     Extract a single JPEG frame from the start of the subtitle timestamp.
+    Only valid for video files — raises ValueError for audio-only sources.
     Returns output_path on success.
     """
+    if is_audio_only(video_path):
+        raise ValueError(f"Cannot extract frame from audio-only file: {video_path}")
+
     seek_s = start_ms / 1000.0
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -85,9 +110,9 @@ def extract_frame(
         '-ss', f'{seek_s:.3f}',
         '-i', video_path,
         '-vframes', '1',
-        '-q:v', '2',
-        output_path,
-        '-y',
+        '-vf', 'scale=min(960\,iw):-2',  # cap at 960px width; halves size on 1080p/4K
+        '-q:v', '5',                      # JPEG ~80% quality — perfect for flashcards
+        output_path, '-y',
     ]
     try:
         subprocess.run(cmd, capture_output=True, check=True, timeout=60)

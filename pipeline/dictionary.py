@@ -8,8 +8,8 @@ data/dictionary.db (one-time, ~seconds). Subsequent loads open the DB
 instantly.
 
 DB layout:
-  dictionary (term, definition)  — compact HTML, NO CSS per-row.
-  meta (key, value)              — CSS block stored once here.
+  dictionary (term, reading, definition)  — one row per (term, reading) pair.
+  meta (key, value)                       — CSS block stored once here.
 
 lookup() appends the CSS block to the returned HTML so Anki card fields
 are self-contained and render correctly without any external stylesheet.
@@ -23,6 +23,7 @@ import zipfile
 from typing import Optional
 
 import settings as settings_module
+from pipeline.utils import kata_to_hira as _kata_to_hira
 
 
 # Fixed DB path — always the same file regardless of which zip was imported.
@@ -257,12 +258,66 @@ class DictionaryDB:
 
     def lookup(self, term: str) -> Optional[str]:
         cursor = self._conn.cursor()
-        cursor.execute('SELECT definition FROM dictionary WHERE term = ?', (term,))
+        cursor.execute('SELECT definition FROM dictionary WHERE term = ? LIMIT 1', (term,))
         row = cursor.fetchone()
         if not row:
             return None
-        # Append CSS so Anki card fields are self-contained
         return row['definition'] + self._css_block
+
+    def lookup_by_reading(self, term: str, reading: str) -> Optional[str]:
+        """
+        Look up definition for a specific (term, reading) pair.
+        Falls back to any reading if the specific one isn't found.
+        """
+        cursor = self._conn.cursor()
+        # Try exact (term, reading) match first
+        cursor.execute(
+            'SELECT definition FROM dictionary WHERE term = ? AND reading = ? LIMIT 1',
+            (term, reading)
+        )
+        row = cursor.fetchone()
+        if row:
+            return row['definition'] + self._css_block
+        # Fallback: any entry for this term
+        cursor.execute('SELECT definition FROM dictionary WHERE term = ? LIMIT 1', (term,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return row['definition'] + self._css_block
+
+    def lookup_reading(self, term: str) -> Optional[str]:
+        """Return the first kana reading for this term (for fallback use)."""
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute('SELECT reading FROM dictionary WHERE term = ? LIMIT 1', (term,))
+            row = cursor.fetchone()
+            if row and row['reading']:
+                return row['reading']
+            return None
+        except Exception:
+            return None
+
+    def lookup_all_readings(self, term: str) -> list[str]:
+        """Return all kana readings for this term."""
+        cursor = self._conn.cursor()
+        cursor.execute('SELECT DISTINCT reading FROM dictionary WHERE term = ?', (term,))
+        return [row['reading'] for row in cursor.fetchall() if row['reading']]
+
+    def terms_exist_batch(self, terms: list[str]) -> set[str]:
+        """
+        Return the subset of `terms` that have at least one entry in the dictionary.
+        Uses one SQL query with WHERE term IN (...) instead of N separate queries.
+        This replaces the N individual lookup() calls in the scan candidate loop.
+        """
+        if not terms:
+            return set()
+        placeholders = ','.join('?' * len(terms))
+        cursor = self._conn.cursor()
+        cursor.execute(
+            f'SELECT DISTINCT term FROM dictionary WHERE term IN ({placeholders})',
+            terms
+        )
+        return {row['term'] for row in cursor.fetchall()}
 
     def close(self):
         if self._conn:
@@ -288,7 +343,7 @@ def _index_zip_to_db(zip_path: str, db_path: str):
     cursor = conn.cursor()
     cursor.execute('DROP TABLE IF EXISTS dictionary')
     cursor.execute('DROP TABLE IF EXISTS meta')
-    cursor.execute('CREATE TABLE dictionary (term TEXT, definition TEXT)')
+    cursor.execute('CREATE TABLE dictionary (term TEXT, reading TEXT, definition TEXT)')
     cursor.execute('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)')
 
     dict_name = 'Jitendex'
@@ -305,7 +360,8 @@ def _index_zip_to_db(zip_path: str, db_path: str):
         css_block = _build_css_block(escaped_name)
         cursor.executemany(
             'INSERT INTO meta (key, value) VALUES (?, ?)',
-            [('dict_name', dict_name), ('css_block', css_block)]
+            [('dict_name', dict_name), ('css_block', css_block),
+             ('schema_version', str(_DB_SCHEMA_VERSION))]
         )
 
         names = sorted([n for n in zf.namelist() if re.search(r'term_bank_\d+\.json$', n)])
@@ -313,29 +369,32 @@ def _index_zip_to_db(zip_path: str, db_path: str):
             try:
                 data = json.loads(zf.read(name).decode('utf-8'))
                 batch = []
-                seen = set()
+                seen = set()  # dedup by (term, reading) pair
                 for entry in data:
                     if not isinstance(entry, list) or len(entry) < 6:
                         continue
                     term = entry[0]
-                    if term in seen:
+                    reading = entry[1] if len(entry) > 1 else ''
+                    key = (term, reading)
+                    if key in seen:
                         continue
                     defs = entry[5]
                     html = _defs_to_html(defs, dict_name)
                     if html:
-                        batch.append((term, html))
-                        seen.add(term)
+                        batch.append((term, reading, html))
+                        seen.add(key)
 
                 cursor.executemany(
-                    'INSERT INTO dictionary (term, definition) VALUES (?, ?)',
+                    'INSERT INTO dictionary (term, reading, definition) VALUES (?, ?, ?)',
                     batch
                 )
                 conn.commit()
             except Exception as e:
                 print(f'[dictionary] Error indexing {name}: {e}')
 
-    # Build index AFTER all inserts (faster than index-per-insert)
+    # Build indexes AFTER all inserts (faster than index-per-insert)
     cursor.execute('CREATE INDEX idx_term ON dictionary (term)')
+    cursor.execute('CREATE INDEX idx_term_reading ON dictionary (term, reading)')
     conn.commit()
 
     # Defragment and verify
@@ -344,10 +403,30 @@ def _index_zip_to_db(zip_path: str, db_path: str):
     print(f'[dictionary] Indexed "{dict_name}" → {db_path}')
 
 
+# Increment this when the DB schema or indexing logic changes.
+# App will automatically re-index on next startup.
+_DB_SCHEMA_VERSION = 2  # v2: deduplicate by (term, reading) pair
+
+
+def _db_needs_reindex(db_path: str) -> bool:
+    """Return True if DB schema version doesn't match current _DB_SCHEMA_VERSION."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'")
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return True
+        return int(row[0]) < _DB_SCHEMA_VERSION
+    except Exception:
+        return True
+
+
 def load(zip_path: str) -> DictionaryDB:
     """
     Load dictionary from fixed DB path.
-    Re-indexes if DB is missing or ZIP is newer than DB.
+    Re-indexes if DB is missing, ZIP is newer, or schema is outdated.
     """
     db_path = _DB_PATH
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -357,16 +436,62 @@ def load(zip_path: str) -> DictionaryDB:
         not db_missing and
         os.path.getmtime(zip_path) > os.path.getmtime(db_path)
     )
+    schema_outdated = not db_missing and _db_needs_reindex(db_path)
 
-    if db_missing or zip_newer:
-        print('[dictionary] Indexing zip → dictionary.db (one-time)…')
+    if db_missing or zip_newer or schema_outdated:
+        reason = 'schema migration' if schema_outdated else 'first time or zip updated'
+        print(f'[dictionary] Indexing zip → dictionary.db ({reason})…')
         _index_zip_to_db(zip_path, db_path)
 
     return DictionaryDB(db_path)
 
 
 def lookup(db: DictionaryDB, lemma: str) -> Optional[str]:
-    """Look up lemma. Returns HTML string or None."""
+    """Look up lemma. Returns HTML definition string or None."""
     if db is None:
         return None
     return db.lookup(lemma)
+
+
+def lookup_terms_batch(db: DictionaryDB, terms: list[str]) -> set[str]:
+    """
+    Return the subset of `terms` that exist in the dictionary.
+    ONE SQL query instead of N individual lookup() calls.
+    Use during scan candidate collection to filter words before per-word work.
+    """
+    if db is None:
+        return set()
+    return db.terms_exist_batch(terms)
+
+
+def lookup_for_reading(db: DictionaryDB, lemma: str, reading: str) -> Optional[str]:
+    """
+    Look up definition for a specific (lemma, reading) pair.
+    Use this when you already know the preferred reading (e.g. from freq selection).
+    Falls back to any entry for the lemma if the specific reading isn't found.
+    """
+    if db is None:
+        return None
+    return db.lookup_by_reading(lemma, reading)
+
+
+def lookup_reading(db: DictionaryDB, lemma: str) -> Optional[str]:
+    """Look up the first kana reading of lemma from Jitendex (fallback). Use lookup_best_reading for frequency-aware selection."""
+    if db is None:
+        return None
+    reading = db.lookup_reading(lemma)
+    if not reading:
+        return None
+    return _kata_to_hira(reading)
+
+
+def lookup_all_readings(db: DictionaryDB, lemma: str) -> list[str]:
+    """
+    Return ALL kana readings for lemma from Jitendex, converted to hiragana.
+    Use this with frequency.get_best_reading() to pick the most common reading.
+    """
+    if db is None:
+        return []
+    return [_kata_to_hira(r) for r in db.lookup_all_readings(lemma) if r]
+
+

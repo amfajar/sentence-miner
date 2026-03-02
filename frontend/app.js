@@ -13,17 +13,16 @@ const MAX_LOG_ENTRIES = 500;
 let scanItems = [];  // cached scan result items
 
 const state = {
-    videoPath: null,
+    mediaPath: null,   // video or audio file
     srtPath: null,
     epubPath: null,
-    inputType: 'video',
+    inputType: 'media',
 };
 
 // Debounce timer for settings save
 let saveTimer = null;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-// ── Initialization ─────────────────────────────────────────────────────────────
 window.addEventListener('pywebviewready', async () => {
     // 1. Setup UI components
     setupTabs();
@@ -70,7 +69,7 @@ function setupSourceTabs() {
             state.inputType = src;
             document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            document.getElementById('video-section').classList.toggle('hidden', src !== 'video');
+            document.getElementById('media-section').classList.toggle('hidden', src !== 'media');
             document.getElementById('youtube-section').classList.toggle('hidden', src !== 'youtube');
             document.getElementById('epub-section').classList.toggle('hidden', src !== 'epub');
         });
@@ -79,14 +78,26 @@ function setupSourceTabs() {
 
 // ── Drop zones ─────────────────────────────────────────────────────────────────
 function setupDropZones() {
-    setupDropZone('video-drop', ['Video Files (*.mkv;*.mp4;*.avi;*.mov;*.webm)', 'All Files (*.*)'], (path) => {
-        state.videoPath = path;
-        showFileInZone('video-drop', path);
+    setupDropZone('media-drop', [
+        'Video Files (*.mp4;*.mkv;*.avi;*.mov;*.webm)',
+        'Audio Files (*.mp3;*.wav;*.m4a;*.ogg;*.flac;*.aac;*.opus;*.wma)',
+        'All Files (*.*)',
+    ], (path) => {
+        state.mediaPath = path;
+        showFileInZone('media-drop', path);
+        // Show hint if audio-only
+        const isAudio = /\.(mp3|wav|m4a|ogg|flac|aac|opus|wma)$/i.test(path);
+        const hint = document.getElementById('media-type-hint');
+        if (hint) {
+            hint.textContent = isAudio
+                ? '🎵 Audio file — no screenshot/picture will be extracted.'
+                : '';
+        }
     });
 
     setupDropZone('srt-drop', ['Subtitle Files (*.srt;*.ass)'], (path) => {
         state.srtPath = path;
-        const name = path.split(/[\\/]/).pop();
+        const name = path.split(/[\\\/]/).pop();
         const titleEl = document.querySelector('#srt-drop .drop-title-sm');
         const hintEl = document.querySelector('#srt-drop .drop-hint-sm');
         if (titleEl) titleEl.textContent = name;
@@ -94,7 +105,7 @@ function setupDropZones() {
         document.getElementById('srt-drop').classList.add('has-file');
     });
 
-    setupDropZone('epub-drop', ['EPUB Files (*.epub)'], (path) => {
+    setupDropZone('epub-drop', ['EPUB Files (*.epub)', 'Text Files (*.txt)', 'All Files (*.*)'], (path) => {
         state.epubPath = path;
         showFileInZone('epub-drop', path);
     });
@@ -131,7 +142,7 @@ function setupDropZone(id, fileTypes, onSelect) {
 function showFileInZone(id, path) {
     const zone = document.getElementById(id);
     if (!zone) return;
-    const name = path.split(/[\\/]/).pop();
+    const name = path.split(/[\\\/]/).pop();
     const titleEl = zone.querySelector('.drop-title');
     const hintEl = zone.querySelector('.drop-hint');
     if (titleEl) titleEl.textContent = name;
@@ -192,6 +203,18 @@ function setupSettingsListeners() {
         settings.note_type = e.target.value;
         scheduleSave();
     });
+
+    // Toggle: Word Audio
+    document.getElementById('toggle-word-audio').addEventListener('change', (e) => {
+        settings.use_word_audio = e.target.checked;
+        scheduleSave();
+    });
+
+    // Toggle: Allow Duplicates
+    document.getElementById('toggle-allow-dupes').addEventListener('change', (e) => {
+        settings.allow_duplicates = e.target.checked;
+        scheduleSave();
+    });
 }
 
 function applySettingsToUI(s) {
@@ -212,13 +235,20 @@ function applySettingsToUI(s) {
 
     // Update dictionary displays
     if (s.jitendex_path) {
-        const name = s.jitendex_path.split(/[\\/]/).pop();
+        const name = s.jitendex_path.split(/[\\\/]/).pop();
         setFileDisplay('jitendex-display', name);
     }
     if (s.freq_dict_path) {
-        const name = s.freq_dict_path.split(/[\\/]/).pop();
+        const name = s.freq_dict_path.split(/[\\\/]/).pop();
         setFileDisplay('freq-display-path', name);
     }
+
+    // Toggles
+    const wordAudioEl = document.getElementById('toggle-word-audio');
+    if (wordAudioEl) wordAudioEl.checked = s.use_word_audio !== false; // default true
+
+    const allowDupesEl = document.getElementById('toggle-allow-dupes');
+    if (allowDupesEl) allowDupesEl.checked = s.allow_duplicates === true; // default false
 }
 
 function setValue(id, val) {
@@ -319,7 +349,7 @@ async function importDictionary(type) {
 
     const result = await window.pywebview.api.import_dictionary(path, type);
     if (result.ok) {
-        const name = result.path.split(/[\\/]/).pop();
+        const name = result.path.split(/[\\\/]/).pop();
         setFileDisplay(displayId, name);
         settings[type === 'jitendex' ? 'jitendex_path' : 'freq_dict_path'] = result.path;
         btn.textContent = 'Re-import';
@@ -347,12 +377,55 @@ async function clearAnkiCache() {
     resultEl.classList.remove('hidden');
 }
 
+// ── Create New Deck ────────────────────────────────────────────────────────────
+async function createDeck() {
+    const input = document.getElementById('new-deck-input');
+    const btn = document.getElementById('new-deck-btn');
+    const resultEl = document.getElementById('new-deck-result');
+    const name = input.value.trim();
+
+    if (!name) {
+        resultEl.textContent = 'Enter a deck name first.';
+        resultEl.className = 'test-result error';
+        resultEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.textContent = 'Creating…';
+    btn.disabled = true;
+    resultEl.classList.add('hidden');
+
+    const result = await window.pywebview.api.create_deck(name);
+
+    btn.textContent = 'Create';
+    btn.disabled = false;
+
+    if (result.ok) {
+        resultEl.textContent = `Deck "${name}" created and selected.`;
+        resultEl.className = 'test-result success';
+        resultEl.classList.remove('hidden');
+        input.value = '';
+        // Refresh dropdown and select new deck
+        if (result.decks) {
+            populateSelect('deck-select', result.decks, name);
+        }
+        settings.deck_name = name;
+        scheduleSave();
+        // Also update the deck name in settings tab
+        setValue('s-deck-name', name);
+        addLogEntry('info', null, null, `Deck created: ${name}`);
+    } else {
+        resultEl.textContent = `Error: ${result.error}`;
+        resultEl.className = 'test-result error';
+        resultEl.classList.remove('hidden');
+    }
+}
+
 // ── Progress handler (called from Python via evaluate_js) ──────────────────────
 function onProgress(data) {
     switch (data.type) {
         case 'status':
             addLogEntry('info', null, null, data.msg);
-            // Also update anki status if we get known_count
             if (data.known_count !== undefined) updateAnkiStatus(data);
             break;
         case 'progress':
@@ -435,7 +508,6 @@ function addLogEntry(badge, word, reading, detail, rank) {
     const feed = document.getElementById('log-feed');
     if (!feed) return;
 
-    // Cap at MAX_LOG_ENTRIES
     if (logCount >= MAX_LOG_ENTRIES) {
         feed.removeChild(feed.firstChild);
     }
@@ -493,7 +565,6 @@ async function handleStartStop() {
     resetProgressUI();
     addLogEntry('info', null, null, `Starting ${state.inputType} processing…`);
 
-    // Non-blocking — progress comes via onProgress()
     window.pywebview.api.start_processing(payload);
 }
 
@@ -501,10 +572,10 @@ function buildPayload() {
     const type = state.inputType;
     const payload = { input_type: type };
 
-    if (type === 'video') {
-        if (!state.videoPath) { showError('Please select a video file.'); return null; }
+    if (type === 'media') {
+        if (!state.mediaPath) { showError('Please select a media file (video or audio).'); return null; }
         if (!state.srtPath) { showError('Please select a subtitle file (.srt or .ass).'); return null; }
-        payload.video_path = state.videoPath;
+        payload.media_path = state.mediaPath;
         payload.srt_path = state.srtPath;
         const offsetSec = parseFloat(document.getElementById('sub-offset')?.value || '0') || 0;
         payload.sub_offset_ms = Math.round(offsetSec * 1000);
@@ -513,7 +584,7 @@ function buildPayload() {
         if (!url.startsWith('http')) { showError('Please enter a valid YouTube URL.'); return null; }
         payload.youtube_url = url;
     } else if (type === 'epub') {
-        if (!state.epubPath) { showError('Please select an EPUB file.'); return null; }
+        if (!state.epubPath) { showError('Please select an EPUB or TXT file.'); return null; }
         payload.epub_path = state.epubPath;
         const charStart = parseInt(document.getElementById('epub-char-start').value) || 0;
         const charEndVal = document.getElementById('epub-char-end').value.trim();
@@ -577,34 +648,26 @@ function hideElement(id) {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
 }
+
 // ── Furigana HTML builder ──────────────────────────────────────────────────────
-/**
- * Build <ruby> HTML for a sentence given its token list and the target lemma.
- * Target word gets <b> + ruby; other kanji get ruby; kana/gap text is escaped.
- * Mirrors Python furigana.sentence_furigana_html().
- */
 function buildSentenceHtml(sentence, tokens, targetLemma) {
     if (!tokens || tokens.length === 0) return escapeHtml(sentence);
 
-    // Sort tokens by start position
     const sorted = [...tokens].sort((a, b) => a.start - b.start);
 
     const HAS_KANJI = /[\u4E00-\u9FFF\u3400-\u4DBF]/;
     const IS_KANA = /[\u3040-\u30FF]/;
 
-    /** Align kanji run to its reading, producing [{surface, furi}] pairs. */
     function alignFurigana(surface, reading) {
         const segs = [];
         let lPos = 0, rPos = 0;
         while (lPos < surface.length) {
             const ch = surface[lPos];
             if (IS_KANA.test(ch)) {
-                // kana: advance reading if it matches
                 if (rPos < reading.length && reading[rPos] === ch) rPos++;
                 segs.push({ s: ch, r: '' });
                 lPos++;
             } else {
-                // kanji run
                 const kStart = lPos;
                 while (lPos < surface.length && !IS_KANA.test(surface[lPos])) lPos++;
                 const kanjiRun = surface.slice(kStart, lPos);
@@ -629,7 +692,6 @@ function buildSentenceHtml(sentence, tokens, targetLemma) {
         return segs;
     }
 
-    /** Build ruby HTML string from a surface+reading pair. */
     function rubyHtml(surface, reading) {
         if (!HAS_KANJI.test(surface)) return escapeHtml(surface);
         const segs = alignFurigana(surface, reading);
@@ -720,35 +782,27 @@ function renderPreview(items) {
         row.className = 'candidate-row';
         row.id = `cand-${idx}`;
 
-        // Extract clean glosses from Jitendex HTML (li.gloss-sc-li)
-        // Only take short pure-English items (skip notes, example sentences)
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = item.definition;
 
-        // Clone li items and remove any inner <span> sub-elements (notes, brackets, etc.)
         const glossItems = Array.from(tempDiv.querySelectorAll('li.gloss-sc-li'));
         const cleanGlosses = glossItems
             .map(li => {
-                // Get only direct text nodes (skip sub-element text like notes)
                 const clone = li.cloneNode(true);
-                // Remove note/bracket spans if present
                 clone.querySelectorAll('.sense-note, .badge, sup, .info').forEach(el => el.remove());
                 return clone.textContent.trim();
             })
-            // Only take short English-only items (gloss, not example sentences)
             .filter(t => t.length > 0 && t.length < 50 && !/[ぁ-ん]|[ァ-ン]|[一-龯]/.test(t));
 
         let shortDef;
         if (cleanGlosses.length > 0) {
             shortDef = cleanGlosses.slice(0, 3).join(' · ');
         } else {
-            // Fallback: first short plain-text chunk
             const plain = tempDiv.textContent || '';
             shortDef = plain.replace(/\s+/g, ' ').trim().slice(0, 80);
         }
 
         const rankBadge = item.rank ? `<span class="cand-rank">#${item.rank.toLocaleString()}</span>` : '';
-
         const sentenceHtml = buildSentenceHtml(item.sentence, item.sentence_tokens, item.lemma);
 
         row.innerHTML = `
@@ -800,7 +854,6 @@ async function mineAll() {
     mineBtn.textContent = 'Mining…';
     mineBtn.disabled = true;
 
-    // Delegate to standard start mining flow
     const payload = buildPayload();
     if (!payload) {
         mineBtn.textContent = '⚡ Mine All';
@@ -821,7 +874,7 @@ function hidePreview() {
 
 async function detectEpubLength() {
     if (!state.epubPath) {
-        showError('Please select an EPUB file first.');
+        showError('Please select an EPUB or TXT file first.');
         return;
     }
     const btn = document.getElementById('epub-detect-btn');
@@ -834,7 +887,7 @@ async function detectEpubLength() {
 
     if (result.ok) {
         const hint = document.getElementById('epub-char-hint');
-        if (hint) hint.textContent = `Total book length: ${result.count.toLocaleString()} characters.`;
+        if (hint) hint.textContent = `Total length: ${result.count.toLocaleString()} characters.`;
     } else {
         showError(`Could not detect length: ${result.error}`);
     }

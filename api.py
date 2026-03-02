@@ -7,6 +7,8 @@ import json
 import os
 import re
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
@@ -23,6 +25,26 @@ from pipeline.youtube import NoManualSubtitlesError
 def _strip_ass_tags(text: str) -> str:
     """Strip ASS/SSA override tags like {\\an8}, {\\pos(...)}."""
     return re.sub(r'\{[^}]*\}', '', text)
+
+
+def _best_reading(jitendex_db, freq_db, lemma: str, sudachi_reading: str) -> str:
+    """
+    Pick the best reading for `lemma` by frequency rank.
+
+    Algorithm:
+      1. Collect ALL readings Jitendex has for this lemma (e.g. 本屋 → [ほんや, もとや])
+      2. Add the SudachiPy reading as an extra candidate
+      3. Deduplicate while preserving order
+      4. Return the candidate with the lowest frequency rank
+
+    Examples:
+      本屋: Jitendex [もとや(200K), ほんや(8K)] + SudachiPy ほんや → ほんや ✓
+      好き: Jitendex [すき(100), ずき(14K)] + SudachiPy ずき → すき ✓
+      言う: Jitendex [いう(50)] + SudachiPy ゆう → いう ✓
+    """
+    jitendex_readings = dictionary.lookup_all_readings(jitendex_db, lemma)  # all Jitendex readings, hiragana
+    candidates = list(dict.fromkeys(filter(None, jitendex_readings + [sudachi_reading])))
+    return frequency.get_best_reading(freq_db, candidates) or sudachi_reading
 
 
 class Api:
@@ -68,19 +90,23 @@ class Api:
     # ── Anki ──────────────────────────────────────────────────────────────────
 
     def test_anki_connection(self) -> dict:
-        """Test AnkiConnect connectivity and return card count."""
+        """Test AnkiConnect connectivity and return known word count."""
         try:
             ok = anki.check_connection(self._settings.ankiconnect_url)
             if not ok:
                 return {'ok': False, 'error': 'AnkiConnect not responding.'}
             decks = anki.get_deck_names(self._settings.ankiconnect_url)
             models = anki.get_model_names(self._settings.ankiconnect_url)
-            # Fetch known word count
-            known = anki.get_all_known_expressions(self._settings.ankiconnect_url)
-            self._known_words = known
+            # Reuse in-memory known words if already loaded by background refresh.
+            # Only do a full fetch when the set is empty (first app launch, cache miss).
+            if not self._known_words:
+                self._known_words, _ = anki.get_all_known_expressions(
+                    self._settings.ankiconnect_url,
+                    targets=self._settings.known_word_targets,
+                )
             return {
                 'ok': True,
-                'known_count': len(known),
+                'known_count': len(self._known_words),
                 'decks': decks,
                 'models': models,
             }
@@ -89,7 +115,6 @@ class Api:
 
     def clear_anki_cache(self) -> dict:
         """Delete the Anki known-words disk cache so next startup re-fetches from Anki."""
-        import glob
         cache_dir = os.path.join(os.path.expanduser('~'), '.sentence_miner_cache')
         cache_file = os.path.join(cache_dir, 'known_words.json')
         try:
@@ -110,6 +135,22 @@ class Api:
             return {'ok': True, 'decks': decks, 'models': models}
         except Exception as e:
             return {'ok': False, 'error': str(e), 'decks': [], 'models': []}
+
+    def create_deck(self, deck_name: str) -> dict:
+        """Create a new deck in Anki (no-op if it already exists). Returns {ok, decks}."""
+        deck_name = deck_name.strip()
+        if not deck_name:
+            return {'ok': False, 'error': 'Deck name cannot be empty.'}
+        try:
+            ok = anki.create_deck(self._settings.ankiconnect_url, deck_name)
+            decks = anki.get_deck_names(self._settings.ankiconnect_url)
+            if ok:
+                # Save the new deck as the active deck
+                self._settings.deck_name = deck_name
+                settings_module.save(self._settings)
+            return {'ok': ok, 'decks': decks, 'deck_name': deck_name}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
 
     # ── Initialize ────────────────────────────────────────────────────────────
 
@@ -169,16 +210,24 @@ class Api:
                 decks = anki.get_deck_names(self._settings.ankiconnect_url)
                 models = anki.get_model_names(self._settings.ankiconnect_url)
 
+                # Init SudachiPy tokenizer eagerly so the first scan doesn't
+                # pay the ~3s cold-start cost during the user's scan.
+                if not self._nlp_ready:
+                    _push("Initializing tokenizer (SudachiPy)...")
+                    nlp.init()
+                    self._nlp_ready = True
+
                 # Fast: load from cache immediately, refresh in background
                 def _on_refresh(new_words: set):
                     self._known_words = new_words
-                    _push(f"Anki cache refreshed — {len(new_words):,} expressions.")
+                    _push(f"Anki cache refreshed \u2014 {len(new_words):,} expressions.")
 
                 self._known_words = anki.get_known_expressions_fast(
                     self._settings.ankiconnect_url,
+                    targets=self._settings.known_word_targets,
                     on_refresh_done=_on_refresh
                 )
-                _push(f"Anki connected — {len(self._known_words):,} expressions (from cache).")
+                _push(f"Anki connected \u2014 {len(self._known_words):,} expressions (from cache).")
 
                 result = {
                     'ok': True,
@@ -234,28 +283,28 @@ class Api:
 
         try:
             import srt
-            input_type = payload.get('input_type', 'video')
+            input_type = payload.get('input_type', 'media')
 
             # ── STEP 1: Get input ──────────────────────────────────────────
-            video_path = None
+            media_path = None  # video or audio file
             srt_path = None
 
             if input_type == 'youtube':
                 push({'type': 'status', 'msg': 'Downloading YouTube video...'})
-                video_path, srt_path = youtube.download(
+                media_path, srt_path = youtube.download(
                     payload['youtube_url'], s.temp_dir
                 )
-                push({'type': 'status', 'msg': f'Downloaded: {os.path.basename(video_path)}'})
-            elif input_type == 'video':
-                video_path = payload.get('video_path', '')
+                push({'type': 'status', 'msg': f'Downloaded: {os.path.basename(media_path)}'})
+            elif input_type == 'media':
+                media_path = payload.get('media_path', '')
                 srt_path = payload.get('srt_path', '')
-                if not os.path.exists(video_path):
-                    push({'type': 'error', 'msg': f'Video file not found: {video_path}'})
+                if not os.path.exists(media_path):
+                    push({'type': 'error', 'msg': f'Media file not found: {media_path}'})
                     return
 
             # ── STEP 2: Parse into sentences ───────────────────────────────
             sentences = []
-            if input_type in ('video', 'youtube'):
+            if input_type in ('media', 'youtube'):
                 with open(srt_path, encoding='utf-8', errors='replace') as f:
                     content = f.read()
                 if srt_path.lower().endswith('.ass'):
@@ -268,23 +317,24 @@ class Api:
                         'start_ms': int(sub.start.total_seconds() * 1000),
                         'end_ms': int(sub.end.total_seconds() * 1000),
                     })
-            else:  # epub
-                epub_path = payload.get('epub_path', '')
+            else:  # epub / txt
+                text_path = payload.get('epub_path', '')
                 char_start = int(payload.get('char_start') or 0)
                 char_end_raw = payload.get('char_end')
                 char_end = int(char_end_raw) if char_end_raw else None
                 range_desc = f' (chars {char_start:,}–{char_end:,})' if char_end else ''
-                push({'type': 'status', 'msg': f'Extracting sentences from EPUB{range_desc}...'})
-                texts = epub.extract_sentences(epub_path, char_start, char_end)
+                ext = Path(text_path).suffix.lower()
+                label = 'TXT' if ext == '.txt' else 'EPUB'
+                push({'type': 'status', 'msg': f'Extracting sentences from {label}{range_desc}...'})
+                texts = epub.extract_sentences(text_path, char_start, char_end)
                 sentences = [{'text': t, 'start_ms': None, 'end_ms': None} for t in texts]
 
             push({'type': 'status', 'msg': f'Parsed {len(sentences):,} sentences.'})
 
             # ── STEP 3: Tokenize all sentences, collect candidates ─────────
-            # {lemma: [ {text, start_ms, end_ms, token, rank} ]}
             candidates: dict[str, list] = {}
             total_sents = len(sentences)
-            freq_skipped_words: set[str] = set()  # track for final count
+            freq_skipped_words: set[str] = set()
 
             for idx, sent in enumerate(sentences):
                 if not self._running:
@@ -301,18 +351,18 @@ class Api:
                         continue
 
                     lemma = token['lemma']
-                    if lemma in self._known_words:
+
+                    # Cross-deck dedup: only skip if allow_duplicates is OFF
+                    if not s.allow_duplicates and lemma in self._known_words:
                         continue
 
                     rank = frequency.get_rank(self._freq_dict, lemma)
                     in_dict = dictionary.lookup(self._jitendex, lemma) if self._jitendex else None
 
-                    # Always skip words with no Jitendex definition
                     if not in_dict:
                         freq_skipped_words.add(lemma)
                         continue
 
-                    # Skip words exceeding freq threshold, including words not in JPDB (rank 999999)
                     if rank > s.freq_threshold:
                         freq_skipped_words.add(lemma)
                         continue
@@ -361,18 +411,34 @@ class Api:
             push({'type': 'status',
                   'msg': f'Selected best sentences. Starting card creation for {len(results):,} words...'})
 
-            # ── STEP 5: Create Anki cards ──────────────────────────────────
+            # ── STEP 5: Create Anki cards (batch) ─────────────────────────
             os.makedirs(s.temp_dir, exist_ok=True)
             added = 0
             skipped_known = 0
-            skipped_freq = len(freq_skipped_words)  # already counted in scan phase
+            skipped_freq = len(freq_skipped_words)
             total = len(results)
 
             source_name = (
-                Path(video_path).name if video_path
+                Path(media_path).name if media_path
                 else payload.get('youtube_url', '')
                      or Path(payload.get('epub_path', '')).name
             )
+
+            audio_only = media_path and media.is_audio_only(media_path)
+            # Fetch media duration once — avoid N ffprobe calls inside the loop
+            media_duration_ms = media.get_media_duration_ms(media_path) if media_path else 0
+
+            t_batch_start = time.perf_counter()
+            _bt_sent_furi = 0.0; _bt_audio_clip = 0.0; _bt_screenshot = 0.0
+            _bt_word_audio = 0.0; _bt_upload = 0.0
+
+            # ── Phase 1: Build all payloads + extract media ──────────────────
+            # Fast loop — extract media files (CPU-bound ffmpeg), no uploads yet.
+            # Collect all (local_path, fields_dict, field_key) into `uploads`.
+            pending: list[tuple[str, str, int, dict]] = []  # (lemma, reading, rank, fields)
+            uploads: list[tuple[str, dict, str]] = []  # (local_path, fields_ref, field_key)
+
+            push({'type': 'status', 'msg': f'Building {total} cards...'})
 
             for i, (lemma, occ) in enumerate(results):
                 if not self._running:
@@ -394,33 +460,40 @@ class Api:
                 sentence_text = occ['text']
                 rank = occ['rank']
 
-                # Re-check (this lemma may have been added earlier in this run)
-                if lemma in self._known_words:
+                # Cross-deck dedup: skip if already known
+                if not s.allow_duplicates and lemma in self._known_words:
                     skipped_known += 1
                     push({'type': 'log', 'badge': 'skip', 'word': lemma,
                           'reading': token['reading'], 'detail': 'already in Anki'})
                     continue
 
-                # Re-tokenize sentence for furigana generation
+                _t0 = time.perf_counter()
                 sentence_tokens = nlp.tokenize(sentence_text)
+                sentence_tokens = furigana.apply_jitendex_readings(
+                    sentence_tokens,
+                    lambda lm: dictionary.lookup_reading(self._jitendex, lm),
+                    freq_fn=lambda c: frequency.get_best_reading(self._freq_dict, c),
+                )
+                _bt_sent_furi += (time.perf_counter() - _t0) * 1000
+
+                jitendex_word_reading = _best_reading(
+                    self._jitendex, self._freq_dict, lemma, token['reading']
+                )
+                defn = dictionary.lookup_for_reading(self._jitendex, lemma, jitendex_word_reading) or ''
 
                 fields = {
                     'Expression': lemma,
-                    'ExpressionFurigana': furigana.expression_furigana(
-                        lemma, token['reading']
-                    ),
-                    'ExpressionReading': token['reading'],
+                    'ExpressionFurigana': furigana.expression_furigana(lemma, jitendex_word_reading),
+                    'ExpressionReading': jitendex_word_reading,
                     'ExpressionAudio': '',
-                    'SelectionText': '',  # User requested empty
-                    'MainDefinition': dictionary.lookup(self._jitendex, lemma) or '',
+                    'SelectionText': '',
+                    'MainDefinition': defn,
                     'DefinitionPicture': '',
                     'Sentence': sentence_text,
-                    'SentenceFurigana': furigana.sentence_furigana_html(
-                        sentence_text, sentence_tokens, lemma
-                    ),
+                    'SentenceFurigana': furigana.sentence_furigana_html(sentence_text, sentence_tokens, lemma),
                     'SentenceAudio': '',
                     'Picture': '',
-                    'Glossary': dictionary.lookup(self._jitendex, lemma) or '',
+                    'Glossary': defn,
                     'Hint': '',
                     'IsWordAndSentenceCard': '',
                     'IsClickCard': '',
@@ -433,73 +506,122 @@ class Api:
                     'MiscInfo': source_name,
                 }
 
-                # Video-specific: audio clip + frame
-                if input_type in ('video', 'youtube') and occ['start_ms'] is not None:
+                # Media: extract files now (CPU-bound), upload later in parallel
+                if input_type in ('media', 'youtube') and occ['start_ms'] is not None:
                     uid = uuid4().hex[:8]
-
-                    # Audio clip
                     try:
-                        clip_filename = f"{lemma}_{uid}_clip.mp3"
-                        clip_path = os.path.join(s.temp_dir, clip_filename)
+                        _t0 = time.perf_counter()
+                        clip_path = os.path.join(s.temp_dir, f"{lemma}_{uid}_clip.mp3")
                         media.extract_audio_clip(
-                            video_path, occ['start_ms'], occ['end_ms'],
-                            clip_path, s.clip_padding_ms,
+                            media_path, occ['start_ms'], occ['end_ms'],
+                            clip_path, s.clip_padding_ms, media_duration_ms,
                         )
-                        stored_clip = anki.upload_media(
-                            s.ankiconnect_url, clip_path
-                        )
-                        fields['SentenceAudio'] = f"[sound:{stored_clip}]"
+                        _bt_audio_clip += (time.perf_counter() - _t0) * 1000
+                        uploads.append((clip_path, fields, 'SentenceAudio'))
                     except Exception as e:
                         print(f"[api] Audio clip error for {lemma}: {e}")
 
-                    # Frame
+                    if not audio_only:
+                        try:
+                            _t0 = time.perf_counter()
+                            frame_path = os.path.join(s.temp_dir, f"{lemma}_{uid}_frame.jpg")
+                            media.extract_frame(media_path, occ['start_ms'], occ['end_ms'], frame_path)
+                            _bt_screenshot += (time.perf_counter() - _t0) * 1000
+                            uploads.append((frame_path, fields, 'Picture'))
+                        except Exception as e:
+                            print(f"[api] Frame error for {lemma}: {e}")
+
+                # Word audio (HTTP fetch — also deferred to parallel upload phase)
+                if s.use_word_audio:
                     try:
-                        frame_filename = f"{lemma}_{uid}_frame.jpg"
-                        frame_path = os.path.join(s.temp_dir, frame_filename)
-                        media.extract_frame(
-                            video_path, occ['start_ms'], occ['end_ms'], frame_path
-                        )
-                        stored_frame = anki.upload_media(
-                            s.ankiconnect_url, frame_path
-                        )
-                        fields['Picture'] = f"<img src='{stored_frame}'>"
+                        _t0 = time.perf_counter()
+                        audio_path = audio_sources.fetch_word_audio(lemma, token['reading'], s.temp_dir)
+                        _bt_word_audio += (time.perf_counter() - _t0) * 1000
+                        if audio_path:
+                            uploads.append((audio_path, fields, 'ExpressionAudio'))
                     except Exception as e:
-                        print(f"[api] Frame error for {lemma}: {e}")
+                        print(f"[api] Word audio error for {lemma}: {e}")
 
-                # Word audio
-                try:
-                    audio_path = audio_sources.fetch_word_audio(
-                        lemma, token['reading'], s.temp_dir
-                    )
-                    if audio_path:
-                        stored_audio = anki.upload_media(s.ankiconnect_url, audio_path)
-                        fields['ExpressionAudio'] = f"[sound:{stored_audio}]"
-                except Exception as e:
-                    print(f"[api] Word audio error for {lemma}: {e}")
+                pending.append((lemma, jitendex_word_reading, rank, fields))
 
-                # Add to Anki
-                try:
-                    note_id = anki.add_note(
-                        s.ankiconnect_url, s.deck_name,
-                        s.note_type, fields, s.tags,
-                    )
-                    if note_id == -1:
-                        skipped_known += 1
-                        push({'type': 'log', 'badge': 'skip', 'word': lemma,
-                              'reading': token['reading'], 'detail': 'duplicate in Anki'})
-                    else:
-                        self._known_words.add(lemma)
-                        added += 1
-                        push({
-                            'type': 'log',
-                            'badge': 'added',
-                            'word': lemma,
-                            'reading': token['reading'],
-                            'rank': rank if rank < 999999 else None,
-                        })
-                except Exception as e:
-                    push({'type': 'log', 'badge': 'error', 'word': lemma,
-                          'reading': token['reading'], 'detail': str(e)})
+            t_extract_ms = (time.perf_counter() - t_batch_start) * 1000
+            print(f'[perf] ── Extract phase ({len(pending)} words, {len(uploads)} media files) ──')
+            print(f'[perf]    Sentence furigana (all):           {_bt_sent_furi:.0f}ms')
+            print(f'[perf]    Audio clip ffmpeg (all):           {_bt_audio_clip:.0f}ms')
+            print(f'[perf]    Screenshot ffmpeg (all):           {_bt_screenshot:.0f}ms')
+            print(f'[perf]    Word audio HTTP (all):             {_bt_word_audio:.0f}ms')
+            print(f'[perf]    Extract phase total:               {t_extract_ms:.0f}ms')
+
+            # ── Phase 1b: Parallel media uploads ────────────────────────────
+            # All files are ready on disk. Upload concurrently to AnkiConnect.
+            # AnkiConnect is a local HTTP server and handles concurrent requests fine.
+            if uploads:
+                push({'type': 'status', 'msg': f'Uploading {len(uploads)} media files...'})
+
+                def _upload_one(args):
+                    local_path, fields_ref, field_key = args
+                    try:
+                        size_kb = os.path.getsize(local_path) // 1024
+                        _t = time.perf_counter()
+                        stored_name = anki.upload_media(s.ankiconnect_url, local_path)
+                        elapsed_ms = (time.perf_counter() - _t) * 1000
+                        fname = os.path.basename(local_path)
+                        print(f'[perf] Upload "{fname}": {size_kb}KB → {elapsed_ms:.0f}ms')
+                        if field_key == 'SentenceAudio':
+                            fields_ref[field_key] = f'[sound:{stored_name}]'
+                        elif field_key == 'Picture':
+                            fields_ref[field_key] = f"<img src='{stored_name}'>"
+                        elif field_key == 'ExpressionAudio':
+                            fields_ref[field_key] = f'[sound:{stored_name}]'
+                        return elapsed_ms
+                    except Exception as e:
+                        print(f'[api] Upload error ({os.path.basename(local_path)}): {e}')
+                        return 0
+
+                _t0 = time.perf_counter()
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    futs = [pool.submit(_upload_one, u) for u in uploads]
+                    elapsed_list = [f.result() for f in futs]
+                _bt_upload = (time.perf_counter() - _t0) * 1000
+                print(f'[perf]    Parallel uploads ({len(uploads)} files, 8 workers):  {_bt_upload:.0f}ms'
+                      f'  (sequential would have been ~{sum(elapsed_list):.0f}ms)')
+
+            # ── Phase 2: Batch addNotes — ONE HTTP call for everything ──────
+            push({'type': 'status', 'msg': f'Sending {len(pending)} notes to Anki...'})
+            note_dicts = [
+                {
+                    'deckName': s.deck_name,
+                    'modelName': s.note_type,
+                    'fields': fields,
+                    'tags': s.tags,
+                    'options': {'allowDuplicate': False, 'duplicateScope': 'deck'},
+                }
+                for _, _, _, fields in pending
+            ]
+            _t0 = time.perf_counter()
+            note_ids = anki.add_notes_batch(s.ankiconnect_url, note_dicts)
+            _dt_batch = (time.perf_counter() - _t0) * 1000
+            print(f'[perf]    addNotes batch ({len(note_dicts)} notes):        {_dt_batch:.0f}ms')
+
+            # ── Phase 3: Process results and push log events ─────────────────
+            for (lemma, jitendex_word_reading, rank, _), note_id in zip(pending, note_ids):
+                if note_id is None:
+                    skipped_known += 1
+                    push({'type': 'log', 'badge': 'skip', 'word': lemma,
+                          'reading': jitendex_word_reading, 'detail': 'duplicate in Anki'})
+                else:
+                    self._known_words.add(lemma)
+                    added += 1
+                    push({
+                        'type': 'log',
+                        'badge': 'added',
+                        'word': lemma,
+                        'reading': jitendex_word_reading,
+                        'rank': rank if rank < 999999 else None,
+                    })
+
+            t_total_ms = (time.perf_counter() - t_batch_start) * 1000
+            print(f'[perf]    Mining total:                      {t_total_ms:.0f}ms')
 
             push({
                 'type': 'done',
@@ -527,69 +649,93 @@ class Api:
         """
         try:
             import srt
-            input_type = payload.get('input_type', 'video')
+            input_type = payload.get('input_type', 'media')
             s = self._settings
 
             # Refresh known words from Anki so duplicates are always up-to-date
             try:
-                fresh_known = anki.get_all_known_expressions(self._settings.ankiconnect_url)
+                fresh_known, _ = anki.get_all_known_expressions(self._settings.ankiconnect_url)
                 if fresh_known:
                     self._known_words = fresh_known
             except Exception:
                 pass  # Use cached known_words if Anki unreachable
 
             # ── Step 1: build sentence list ────────────────────────────────
-            video_path = None
+            media_path = None
             srt_path = None
             sentences = []
+            t_scan_start = time.perf_counter()
 
             if input_type == 'youtube':
-                video_path, srt_path = youtube.download(payload['youtube_url'], s.temp_dir)
-            elif input_type == 'video':
-                video_path = payload.get('video_path', '')
+                media_path, srt_path = youtube.download(payload['youtube_url'], s.temp_dir)
+            elif input_type == 'media':
+                media_path = payload.get('media_path', '')
                 srt_path = payload.get('srt_path', '')
 
-            if input_type in ('video', 'youtube'):
+            if input_type in ('media', 'youtube'):
                 with open(srt_path, encoding='utf-8', errors='replace') as f:
                     content = f.read()
                 if srt_path.lower().endswith('.ass'):
                     content = _strip_ass_tags(content)
                 subs = list(srt.parse(content))
-                # Apply subtitle offset for local video only (not YouTube)
-                offset_ms = int(payload.get('sub_offset_ms', 0)) if input_type == 'video' else 0
+                offset_ms = int(payload.get('sub_offset_ms', 0)) if input_type == 'media' else 0
                 for sub in subs:
-                    text = sub.content.replace('\n', '\u3000').strip()
+                    text = sub.content.replace('\n', '　').strip()
                     start_ms = max(0, int(sub.start.total_seconds() * 1000) - offset_ms)
                     end_ms = max(0, int(sub.end.total_seconds() * 1000) - offset_ms)
                     sentences.append({'text': text, 'start_ms': start_ms, 'end_ms': end_ms})
-            else:  # epub
-                epub_path = payload.get('epub_path', '')
+            else:  # epub / txt
+                text_path = payload.get('epub_path', '')
                 char_start = int(payload.get('char_start') or 0)
                 char_end_raw = payload.get('char_end')
                 char_end = int(char_end_raw) if char_end_raw else None
-                texts = epub.extract_sentences(epub_path, char_start, char_end)
+                texts = epub.extract_sentences(text_path, char_start, char_end)
                 sentences = [{'text': t, 'start_ms': None, 'end_ms': None} for t in texts]
 
             # ── Step 2: collect candidates ─────────────────────────────────
+            # Phase 2a: tokenize all sentences, collect freq-passing lemmas
             candidates: dict[str, list] = {}
+            freq_passing: dict[str, list] = {}  # lemma -> list of (sent, token, rank)
+            t_tok = 0.0; t_freq = 0.0; t_dict = 0.0
+
             for sent in sentences:
+                _t0 = time.perf_counter()
                 tokens = nlp.tokenize(sent['text'])
+                t_tok += time.perf_counter() - _t0
+
                 for token in tokens:
                     if nlp.should_skip(token['surface'], token['lemma'], token['pos_tuple']):
                         continue
                     lemma = token['lemma']
-                    if lemma in self._known_words:
+                    if not s.allow_duplicates and lemma in self._known_words:
                         continue
+
+                    _t0 = time.perf_counter()
                     rank = frequency.get_rank(self._freq_dict, lemma)
+                    t_freq += time.perf_counter() - _t0
+
                     if rank > s.freq_threshold:
                         continue
-                    in_dict = dictionary.lookup(self._jitendex, lemma) if self._jitendex else None
-                    if not in_dict:
-                        continue
-                    if lemma not in candidates:
-                        candidates[lemma] = []
-                    candidates[lemma].append({'text': sent['text'], 'start_ms': sent['start_ms'],
-                                              'end_ms': sent['end_ms'], 'token': token, 'rank': rank})
+
+                    if lemma not in freq_passing:
+                        freq_passing[lemma] = []
+                    freq_passing[lemma].append({'text': sent['text'], 'start_ms': sent['start_ms'],
+                                               'end_ms': sent['end_ms'], 'token': token, 'rank': rank})
+
+            # Phase 2b: batch dictionary existence check (ONE SQL query)
+            _t0 = time.perf_counter()
+            in_dict_set = dictionary.lookup_terms_batch(self._jitendex, list(freq_passing.keys()))
+            t_dict = (time.perf_counter() - _t0) * 1000
+
+            for lemma, occs in freq_passing.items():
+                if lemma in in_dict_set:
+                    candidates[lemma] = occs
+
+            n_sents = len(sentences)
+            print(f'[perf] SudachiPy tokenize      ({n_sents} sents):  {t_tok*1000:.0f}ms')
+            print(f'[perf] Frequency rank lookup                   :  {t_freq*1000:.0f}ms')
+            print(f'[perf] Dictionary batch check  ({len(freq_passing)} terms):  {t_dict:.0f}ms')
+            print(f'[perf] Candidates found                        :  {len(candidates)} words')
 
             # ── Step 3: pick best sentence per word ────────────────────────
             def count_unknowns(sentence_text, exclude_lemma):
@@ -601,25 +747,51 @@ class Api:
 
             result_items = []
             self._scan_cache = {}
-            source_name = (Path(video_path).name if video_path
+            source_name = (Path(media_path).name if media_path
                            else payload.get('youtube_url', '')
                            or Path(payload.get('epub_path', '')).name)
 
+            t_best_sent = 0.0; t_reading = 0.0; t_furi_expr = 0.0
+            t_sent_tok = 0.0; t_sent_furi = 0.0; t_defn = 0.0
+
             for lemma, occs in candidates.items():
+                _t0 = time.perf_counter()
                 best = min(occs, key=lambda o: count_unknowns(o['text'], lemma))
-                defn = dictionary.lookup(self._jitendex, lemma) or ''
+                t_best_sent += time.perf_counter() - _t0
+
                 rank = best['rank']
                 token = best['token']
-                furi = furigana.expression_furigana(lemma, token['reading'])
 
-                # Tokenize sentence for JS-side furigana rendering
+                _t0 = time.perf_counter()
+                jitendex_word_reading = _best_reading(
+                    self._jitendex, self._freq_dict, lemma, token['reading']
+                )
+                t_reading += time.perf_counter() - _t0
+
+                _t0 = time.perf_counter()
+                defn = dictionary.lookup_for_reading(self._jitendex, lemma, jitendex_word_reading) or ''
+                t_defn += time.perf_counter() - _t0
+
+                _t0 = time.perf_counter()
+                furi = furigana.expression_furigana(lemma, jitendex_word_reading)
+                t_furi_expr += time.perf_counter() - _t0
+
+                _t0 = time.perf_counter()
                 sent_tokens = nlp.tokenize(best['text'])
+                t_sent_tok += time.perf_counter() - _t0
 
-                # Store full data for add_single_card
+                _t0 = time.perf_counter()
+                sent_tokens = furigana.apply_jitendex_readings(
+                    sent_tokens,
+                    lambda lm: dictionary.lookup_reading(self._jitendex, lm),
+                    freq_fn=lambda c: frequency.get_best_reading(self._freq_dict, c),
+                )
+                t_sent_furi += time.perf_counter() - _t0
+
                 self._scan_cache[lemma] = {
                     'occ': best, 'token': token, 'rank': rank,
                     'source_name': source_name, 'input_type': input_type,
-                    'video_path': video_path,
+                    'media_path': media_path,
                 }
 
                 result_items.append({
@@ -641,6 +813,17 @@ class Api:
                     ],
                 })
 
+            n_words = len(candidates)
+            print(f'[perf] Best-sentence selection ({n_words} words):  {t_best_sent*1000:.0f}ms  '
+                  f'(re-tokenizes each candidate sentence)')
+            print(f'[perf] _best_reading (freq+jitendex all reads):  {t_reading*1000:.0f}ms')
+            print(f'[perf] Definition lookup (lookup_for_reading)  :  {t_defn*1000:.0f}ms')
+            print(f'[perf] ExpressionFurigana generation           :  {t_furi_expr*1000:.0f}ms')
+            print(f'[perf] SentenceFurigana tokenize               :  {t_sent_tok*1000:.0f}ms')
+            print(f'[perf] SentenceFurigana apply_jitendex_readings:  {t_sent_furi*1000:.0f}ms')
+            t_total = time.perf_counter() - t_scan_start
+            print(f'[perf] ── Total scan time                      :  {t_total*1000:.0f}ms')
+
             # Sort by rank (most common first)
             result_items.sort(key=lambda x: x['rank'] if x['rank'] else 999999)
 
@@ -657,8 +840,6 @@ class Api:
         """
         if lemma not in self._scan_cache:
             return {'ok': False, 'error': 'Word not in scan cache. Run Scan first.'}
-        if lemma in self._known_words:
-            return {'ok': False, 'error': 'Already in Anki.'}
 
         s = self._settings
         cache = self._scan_cache[lemma]
@@ -667,24 +848,40 @@ class Api:
         rank = cache['rank']
         source_name = cache['source_name']
         input_type = cache['input_type']
-        video_path = cache.get('video_path')
+        media_path = cache.get('media_path')
+
+        # Only block if allow_duplicates is OFF
+        if not s.allow_duplicates and lemma in self._known_words:
+            return {'ok': False, 'error': 'Already in Anki.'}
 
         try:
             sentence_text = occ['text']
             sentence_tokens = nlp.tokenize(sentence_text)
+            sentence_tokens = furigana.apply_jitendex_readings(
+                sentence_tokens,
+                lambda lm: dictionary.lookup_reading(self._jitendex, lm),
+                freq_fn=lambda c: frequency.get_best_reading(self._freq_dict, c),
+            )
+            jitendex_word_reading = _best_reading(
+                self._jitendex, self._freq_dict, lemma, token['reading']
+            )
+
+            # Check for same-deck duplicate (catches different note types too)
+            if anki.expression_exists_in_deck(s.ankiconnect_url, s.deck_name, lemma):
+                return {'ok': False, 'error': 'Already in deck (duplicate expression).'}
             fields = {
                 'Expression': lemma,
-                'ExpressionFurigana': furigana.expression_furigana(lemma, token['reading']),
-                'ExpressionReading': token['reading'],
+                'ExpressionFurigana': furigana.expression_furigana(lemma, jitendex_word_reading),
+                'ExpressionReading': jitendex_word_reading,
                 'ExpressionAudio': '',
                 'SelectionText': '',
-                'MainDefinition': dictionary.lookup(self._jitendex, lemma) or '',
+                'MainDefinition': dictionary.lookup_for_reading(self._jitendex, lemma, jitendex_word_reading) or '',
                 'DefinitionPicture': '',
                 'Sentence': sentence_text,
                 'SentenceFurigana': furigana.sentence_furigana_html(sentence_text, sentence_tokens, lemma),
                 'SentenceAudio': '',
                 'Picture': '',
-                'Glossary': dictionary.lookup(self._jitendex, lemma) or '',
+                'Glossary': dictionary.lookup_for_reading(self._jitendex, lemma, jitendex_word_reading) or '',
                 'Hint': '',
                 'IsWordAndSentenceCard': '', 'IsClickCard': '', 'IsSentenceCard': '',
                 'IsAudioCard': '', 'PitchPosition': '', 'PitchCategories': '',
@@ -696,29 +893,35 @@ class Api:
             os.makedirs(s.temp_dir, exist_ok=True)
             uid = uuid4().hex[:8]
 
-            if input_type in ('video', 'youtube') and occ.get('start_ms') is not None:
+            audio_only = media_path and media.is_audio_only(media_path)
+
+            if input_type in ('media', 'youtube') and occ.get('start_ms') is not None:
                 try:
                     clip_path = os.path.join(s.temp_dir, f'{lemma}_{uid}_clip.mp3')
-                    media.extract_audio_clip(video_path, occ['start_ms'], occ['end_ms'],
+                    media.extract_audio_clip(media_path, occ['start_ms'], occ['end_ms'],
                                              clip_path, s.clip_padding_ms)
                     fields['SentenceAudio'] = f'[sound:{anki.upload_media(s.ankiconnect_url, clip_path)}]'
                 except Exception as e:
                     print(f'[api] single card audio error: {e}')
+
+                if not audio_only:
+                    try:
+                        frame_path = os.path.join(s.temp_dir, f'{lemma}_{uid}_frame.jpg')
+                        media.extract_frame(media_path, occ['start_ms'], occ['end_ms'], frame_path)
+                        fields['Picture'] = f"<img src='{anki.upload_media(s.ankiconnect_url, frame_path)}'>"
+                    except Exception as e:
+                        print(f'[api] single card frame error: {e}')
+
+            if s.use_word_audio:
                 try:
-                    frame_path = os.path.join(s.temp_dir, f'{lemma}_{uid}_frame.jpg')
-                    media.extract_frame(video_path, occ['start_ms'], occ['end_ms'], frame_path)
-                    fields['Picture'] = f"<img src='{anki.upload_media(s.ankiconnect_url, frame_path)}'>"
+                    audio_path = audio_sources.fetch_word_audio(lemma, token['reading'], s.temp_dir)
+                    if audio_path:
+                        fields['ExpressionAudio'] = f'[sound:{anki.upload_media(s.ankiconnect_url, audio_path)}]'
                 except Exception as e:
-                    print(f'[api] single card frame error: {e}')
+                    print(f'[api] single card word audio error: {e}')
 
-            try:
-                audio_path = audio_sources.fetch_word_audio(lemma, token['reading'], s.temp_dir)
-                if audio_path:
-                    fields['ExpressionAudio'] = f'[sound:{anki.upload_media(s.ankiconnect_url, audio_path)}]'
-            except Exception as e:
-                print(f'[api] single card word audio error: {e}')
-
-            note_id = anki.add_note(s.ankiconnect_url, s.deck_name, s.note_type, fields, s.tags)
+            note_id = anki.add_note(s.ankiconnect_url, s.deck_name, s.note_type, fields, s.tags,
+                                    allow_duplicate=s.allow_duplicates)
             if note_id == -1:
                 return {'ok': False, 'error': 'Duplicate in Anki.'}
 
@@ -728,10 +931,10 @@ class Api:
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
-    def get_epub_char_count(self, epub_path: str) -> dict:
-        """Return the total extracted character count of an EPUB file."""
+    def get_epub_char_count(self, path: str) -> dict:
+        """Return the total extracted character count of an EPUB or TXT file."""
         try:
-            count = epub.get_total_chars(epub_path)
+            count = epub.get_total_chars(path)
             return {'ok': True, 'count': count}
         except Exception as e:
             return {'ok': False, 'error': str(e)}

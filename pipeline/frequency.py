@@ -17,6 +17,9 @@ class FrequencyDB:
         self.db_path = db_path
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Read-optimised pragmas
+        self._conn.execute('PRAGMA journal_mode=WAL')
+        self._conn.execute('PRAGMA cache_size=-16000')  # ~16MB page cache
 
     def get_rank(self, term: str) -> int:
         cursor = self._conn.cursor()
@@ -120,3 +123,31 @@ def get_rank(db: FrequencyDB, lemma: str) -> int:
     if db is None:
         return 999999
     return db.get_rank(lemma)
+
+
+def get_best_reading(db: FrequencyDB, candidates: list[str]) -> str:
+    """
+    Given a list of candidate readings (hiragana/katakana strings),
+    return the one with the lowest (most common) frequency rank.
+
+    Example:
+      candidates = ['すき', 'ずき']
+      すき rank ≈ 100, ずき rank ≈ 14000
+      → returns 'すき'
+
+    Falls back to candidates[0] if db is None or none found in freq dict.
+    """
+    if not candidates:
+        return ''
+    if db is None or len(candidates) == 1:
+        return candidates[0]
+
+    best = candidates[0]
+    best_rank = 999999
+    for reading in candidates:
+        rank = db.get_rank(reading)
+        if rank < best_rank:
+            best_rank = rank
+            best = reading
+    return best
+

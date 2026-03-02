@@ -30,6 +30,16 @@ class Settings:
     # Processing
     freq_threshold: int = 10000   # mine words ranked 1–threshold; skip anything > threshold
     clip_padding_ms: int = 500    # ms added before + after subtitle for audio clip
+    use_word_audio: bool = True    # fetch word audio (JPod/JapanesePod101) for ExpressionAudio
+    allow_duplicates: bool = False # if True, skip cross-deck dedup (mine words already in other decks)
+
+    # Known-word detection: list of [note_type_name, field_name] pairs.
+    # Words found in these fields are treated as already known and skipped during mining.
+    known_word_targets: list = field(default_factory=lambda: [
+        ['Japanese sentences', 'VocabKanji'],
+        ['Kaishi 1.5K',        'Word'],
+        ['Kiku',               'Expression'],
+    ])
 
 
 def load() -> Settings:
@@ -45,7 +55,8 @@ def load() -> Settings:
             if hasattr(s, k):
                 setattr(s, k, v)
         return s
-    except Exception:
+    except Exception as e:
+        print(f"[settings] Load failed ({e}), using defaults.")
         return Settings()
 
 

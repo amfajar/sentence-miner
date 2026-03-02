@@ -1480,3 +1480,101 @@ a:hover {
     font-size: 1.2em;
     font-weight: bold;
 }
+
+/* ── Toggle Switch ───────────────────────────────────────────────────────── */
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    cursor: default;
+}
+
+.toggle-row:last-of-type {
+    border-bottom: none;
+}
+
+.toggle-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 38px;
+    height: 22px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.toggle-track {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    transition: all var(--transition);
+}
+
+.toggle-switch input:checked+.toggle-track {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: all var(--transition);
+}
+
+.toggle-switch input:checked+.toggle-track .toggle-thumb {
+    transform: translateX(16px);
+    background: hsl(255, 20%, 10%);
+}
+
+/* ── New Deck Row ────────────────────────────────────────────────────────── */
+.new-deck-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    align-items: center;
+}
+
+.new-deck-input {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+/* ── Secondary Button (Scan) ─────────────────────────────────────────────── */
+.secondary-btn {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    box-shadow: none;
+    margin-bottom: 8px;
+}
+
+.secondary-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+    filter: none;
+}

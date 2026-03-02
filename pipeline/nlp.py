@@ -3,7 +3,9 @@ Japanese tokenization using SudachiPy in Split Mode C.
 Initialize once at startup — takes ~3 seconds. Do NOT reinitialize per sentence.
 """
 
+from functools import lru_cache
 from sudachipy import tokenizer, dictionary
+from pipeline.utils import kata_to_hira
 
 # Initialize once; this is expensive (~3s)
 _tokenizer_obj = None
@@ -30,35 +32,18 @@ def init():
     return _tokenizer_obj
 
 
-def _kata_to_hira(text: str) -> str:
-    """Convert katakana to hiragana (basic block only)."""
-    result = []
-    for ch in text:
-        code = ord(ch)
-        if 0x30A1 <= code <= 0x30F6:
-            result.append(chr(code - 0x60))
-        else:
-            result.append(ch)
-    return ''.join(result)
 
-
-def _is_all_katakana(text: str) -> bool:
-    """Return True if every character in text is katakana (or katakana punctuation)."""
-    if not text:
-        return False
-    return all('\u30A0' <= ch <= '\u30FF' for ch in text)
-
-
-def _is_all_kana(text: str) -> bool:
-    """Return True if text is purely hiragana or katakana (no kanji)."""
-    if not text:
-        return False
-    return all(
-        '\u3040' <= ch <= '\u309F'  # hiragana
-        or '\u30A0' <= ch <= '\u30FF'  # katakana
-        or ch in '\u30FC\u3000ー'  # long vowel mark, ideographic space
-        for ch in text
-    )
+@lru_cache(maxsize=4096)
+def _get_lemma_reading(lemma: str) -> str:
+    """
+    Return hiragana reading of `lemma` by re-tokenizing in Mode A.
+    Cached — same lemma is only tokenized once per session.
+    """
+    try:
+        morphemes = _tokenizer_obj.tokenize(lemma, tokenizer.Tokenizer.SplitMode.A)
+        return kata_to_hira(''.join(m.reading_form() for m in morphemes))
+    except Exception:
+        return ''
 
 
 def _has_kanji(text: str) -> bool:
@@ -110,13 +95,14 @@ def tokenize(text: str) -> list[dict]:
     Tokenize a Japanese sentence string.
     Returns a list of token dicts:
       {
-        'surface': str,   # as it appears in the sentence
-        'lemma': str,     # dictionary/base form
-        'reading': str,   # hiragana reading of the SURFACE form
-        'pos': str,       # main POS category string
-        'pos_tuple': tuple,  # full POS tuple from SudachiPy
-        'start': int,     # char index where surface starts
-        'end': int,       # char index where surface ends
+        'surface': str,        # as it appears in the sentence
+        'lemma': str,          # dictionary/base form
+        'reading': str,        # hiragana reading of the SURFACE form
+        'lemma_reading': str,  # hiragana reading of the LEMMA form (for furigana correction)
+        'pos': str,            # main POS category string
+        'pos_tuple': tuple,    # full POS tuple from SudachiPy
+        'start': int,          # char index where surface starts
+        'end': int,            # char index where surface ends
       }
     """
     if _tokenizer_obj is None:
@@ -129,11 +115,20 @@ def tokenize(text: str) -> list[dict]:
             pos_tuple = tuple(m.part_of_speech())
             surface = m.surface()
             lemma = m.dictionary_form()
-            reading = _kata_to_hira(m.reading_form())
+            reading = kata_to_hira(m.reading_form())
+
+            # Get the reading of the lemma (dictionary form) — cached to avoid
+            # re-tokenizing the same lemma repeatedly across sentences.
+            if surface == lemma:
+                lemma_reading = reading
+            else:
+                lemma_reading = _get_lemma_reading(lemma) or reading
+
             tokens.append({
                 'surface': surface,
                 'lemma': lemma,
                 'reading': reading,
+                'lemma_reading': lemma_reading,
                 'pos': pos_tuple[0] if pos_tuple else '',
                 'pos_tuple': pos_tuple,
                 'start': m.begin(),
@@ -143,3 +138,4 @@ def tokenize(text: str) -> list[dict]:
         print(f"[nlp] Tokenize error: {e}")
 
     return tokens
+

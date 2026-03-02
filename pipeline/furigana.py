@@ -13,6 +13,98 @@ def _has_kanji(text: str) -> bool:
     return any('\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf' for ch in text)
 
 
+def _is_kana(ch: str) -> bool:
+    """Return True if ch is hiragana or katakana."""
+    return '\u3040' <= ch <= '\u30ff'
+
+
+# ── Jitendex reading correction ────────────────────────────────────────────────
+
+def _kana_tail_len(text: str) -> int:
+    """Count trailing kana chars in text. e.g. 言う→1, 食べる→2, 走る→1."""
+    count = 0
+    for ch in reversed(text):
+        if _is_kana(ch):
+            count += 1
+        else:
+            break
+    return count
+
+
+def correct_surface_reading(surface: str, lemma: str,
+                             sudachi_surface_reading: str,
+                             sudachi_lemma_reading: str,
+                             jitendex_lemma_reading: str) -> str:
+    """
+    Correct the SudachiPy surface reading using the Jitendex lemma reading.
+
+    Example: 言う surface=言った
+      Jitendex:  いう  → stem い  (tail=1: う)
+      SudachiPy: ゆう  → stem ゆ
+      Surface:   ゆった → replace stem ゆ → いった ✓
+
+    Falls back to sudachi_surface_reading if correction is not safe.
+    """
+    if not jitendex_lemma_reading or not sudachi_lemma_reading:
+        return sudachi_surface_reading
+    if sudachi_lemma_reading == jitendex_lemma_reading:
+        return sudachi_surface_reading  # no correction needed
+
+    tail = _kana_tail_len(lemma)
+    sudachi_stem_len = len(sudachi_lemma_reading) - tail
+    jitendex_stem_len = len(jitendex_lemma_reading) - tail
+
+    if sudachi_stem_len <= 0 or jitendex_stem_len <= 0:
+        return sudachi_surface_reading
+
+    wrong_stem = sudachi_lemma_reading[:sudachi_stem_len]
+    correct_stem = jitendex_lemma_reading[:jitendex_stem_len]
+
+    if not sudachi_surface_reading.startswith(wrong_stem):
+        return sudachi_surface_reading  # unexpected shape, leave it
+
+    return correct_stem + sudachi_surface_reading[len(wrong_stem):]
+
+
+def apply_jitendex_readings(tokens: list[dict], lookup_fn, freq_fn=None) -> list[dict]:
+    """
+    Return tokens with readings corrected using Jitendex dictionary readings.
+
+    lookup_fn: callable(lemma) -> hiragana reading | None
+    freq_fn:   optional callable(candidates: list[str]) -> str
+               When provided, picks the best reading by frequency rank
+               between Jitendex and SudachiPy lemma readings.
+               Example: lambda c: frequency.get_best_reading(freq_db, c)
+
+    Uses correct_surface_reading() to derive conjugated-form corrections.
+    """
+    result = []
+    for tok in tokens:
+        tok = dict(tok)  # shallow copy
+        jitendex_reading = lookup_fn(tok['lemma'])
+        if jitendex_reading:
+            sudachi_lemma_reading = tok.get('lemma_reading', tok['reading'])
+            # If freq_fn provided, pick the most frequent lemma reading
+            if freq_fn and sudachi_lemma_reading and sudachi_lemma_reading != jitendex_reading:
+                candidates = list(dict.fromkeys(filter(None, [jitendex_reading, sudachi_lemma_reading])))
+                best_lemma_reading = freq_fn(candidates)
+            else:
+                best_lemma_reading = jitendex_reading
+
+            tok['reading'] = correct_surface_reading(
+                tok['surface'],
+                tok['lemma'],
+                tok['reading'],
+                sudachi_lemma_reading,
+                best_lemma_reading,
+            )
+        result.append(tok)
+    return result
+
+
+
+
+
 def _common_kana_suffix(lemma: str, reading: str) -> str:
     """
     Find the longest common kana suffix shared by lemma and reading.
@@ -27,9 +119,6 @@ def _common_kana_suffix(lemma: str, reading: str) -> str:
     return lemma[-suffix_len:] if suffix_len else ''
 
 
-def _is_kana(ch: str) -> bool:
-    """Return True if ch is hiragana or katakana."""
-    return '\u3040' <= ch <= '\u30ff'
 
 
 def _align_furigana(lemma: str, reading: str) -> list[tuple[str, str]]:
