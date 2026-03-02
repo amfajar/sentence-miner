@@ -1028,11 +1028,11 @@ class Api:
         try:
             if file_types:
                 result = webview.windows[0].create_file_dialog(
-                    webview.OPEN_DIALOG,
+                    webview.FileDialog.OPEN,
                     file_types=tuple(file_types),
                 )
             else:
-                result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG)
+                result = webview.windows[0].create_file_dialog(webview.FileDialog.OPEN)
 
             if result and len(result) > 0:
                 return result[0]

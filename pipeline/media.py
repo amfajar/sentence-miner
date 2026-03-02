@@ -110,7 +110,7 @@ def extract_frame(
         '-ss', f'{seek_s:.3f}',
         '-i', video_path,
         '-vframes', '1',
-        '-vf', 'scale=min(960\,iw):-2',  # cap at 960px width; halves size on 1080p/4K
+        '-vf', r'scale=min(960\,iw):-2',  # cap at 960px width; halves size on 1080p/4K
         '-q:v', '5',                      # JPEG ~80% quality — perfect for flashcards
         output_path, '-y',
     ]
