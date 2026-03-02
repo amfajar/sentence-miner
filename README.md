@@ -11,6 +11,7 @@ A desktop app for **Japanese sentence mining** from anime, YouTube videos, and E
 | Feature | Detail |
 |---|---|
 | 🎬 **Local Video** | Drop `.mkv` / `.mp4` + `.srt` / `.ass` subtitle file |
+| 🍿 **Batch Mining** | Select a whole folder of Anime episodes + subs. Automatically pairs, scans, and mines them all sequentially! |
 | ▶ **YouTube** | Paste URL — downloads video + manual JP subtitles automatically |
 | 📚 **EPUB** | Drop any Japanese EPUB book, mine a character range |
 | 🔊 **Audio clips** | Auto-cuts the exact subtitle line from the video (with padding) |
@@ -90,6 +91,14 @@ python main.py
 4. If subtitles are out of sync, set **Subtitle offset** (e.g. `+1.5` if subs appear 1.5s late)
 5. Set the **Frequency filter** (default: top 10,000 words)
 6. Click **Scan** to preview candidates, then **Add** individual cards — or **⚡ Mine All**
+
+### Batch Processing (Whole Season)
+
+1. Select **🍿 Batch** tab
+2. Click **Select Folder** and pick the directory containing your video files and subtitle files
+3. The app will automatically pair videos and subtitles based on their filenames (ignoring extensions).
+4. Set the **Subtitle offset** (this will apply to all episodes in the batch)
+5. Click **Scan All** to identify candidates globally, then click **Mine All** to create flashcards for the entire anime season in one go!
 
 ### YouTube
 
