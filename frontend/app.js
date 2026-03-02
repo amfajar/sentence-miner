@@ -145,50 +145,65 @@ function setupDropZone(id, fileTypes, onSelect) {
 
 function setupBatchFolder() {
     const btn = document.getElementById('batch-pick-btn');
+    console.log("[Batch] setupBatchFolder called. btn found:", !!btn);
     if (!btn) return;
 
     btn.addEventListener('click', async () => {
-        const folder = await window.pywebview.api.pick_folder();
-        if (folder) {
-            btn.textContent = 'Scanning…';
-            btn.disabled = true;
-            try {
-                const res = await window.pywebview.api.scan_folder_for_pairs(folder);
-                if (!res.ok) {
-                    showError(res.error);
-                    return;
+        console.log("[Batch] pick folder button clicked!");
+        try {
+            const folder = await window.pywebview.api.pick_folder();
+            console.log("[Batch] pick_folder returned:", folder);
+            if (folder) {
+                btn.textContent = 'Scanning…';
+                btn.disabled = true;
+                try {
+                    const res = await window.pywebview.api.scan_folder_for_pairs(folder);
+                    console.log("[Batch] scan result:", res);
+                    if (!res.ok) {
+                        showError(res.error);
+                        return;
+                    }
+
+                    state.batchPath = res.folder;
+                    state.batchPairs = res.pairs;
+
+                    document.getElementById('batch-empty').classList.add('hidden');
+                    document.getElementById('batch-pairs-container').classList.remove('hidden');
+
+                    const list = document.getElementById('batch-pairs-list');
+                    list.innerHTML = '';
+
+                    res.pairs.forEach(p => {
+                        const li = document.createElement('li');
+                        li.style.cssText = 'padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 13px; display: flex; align-items: center; gap: 8px;';
+                        li.innerHTML = `<span style="color:var(--accent);">✓</span> <span>${p.label} <span style="opacity:0.6;font-size:11px">(.mp4 + .srt)</span></span>`;
+                        list.appendChild(li);
+                    });
+
+                    res.unpaired_vids.forEach(p => {
+                        const li = document.createElement('li');
+                        li.style.cssText = 'padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 13px; display: flex; align-items: center; gap: 8px; opacity: 0.7;';
+                        li.innerHTML = `<span style="color:var(--text-sec);">⚠</span> <span>${p.label} <span style="opacity:0.6;font-size:11px">(no subtitle)</span></span>`;
+                        list.appendChild(li);
+                    });
+
+                    addLogEntry('info', null, null, `Batch folder loaded: ${res.pairs.length} pairs ready.`);
+                } finally {
+                    btn.textContent = 'Select Folder…';
+                    btn.disabled = false;
                 }
-
-                state.batchPath = res.folder;
-                state.batchPairs = res.pairs;
-
-                document.getElementById('batch-empty').classList.add('hidden');
-                document.getElementById('batch-pairs-container').classList.remove('hidden');
-
-                const list = document.getElementById('batch-pairs-list');
-                list.innerHTML = '';
-
-                res.pairs.forEach(p => {
-                    const li = document.createElement('li');
-                    li.style.cssText = 'padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 13px; display: flex; align-items: center; gap: 8px;';
-                    li.innerHTML = `<span style="color:var(--accent);">✓</span> <span>${p.label} <span style="opacity:0.6;font-size:11px">(.mp4 + .srt)</span></span>`;
-                    list.appendChild(li);
-                });
-
-                res.unpaired_vids.forEach(p => {
-                    const li = document.createElement('li');
-                    li.style.cssText = 'padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 13px; display: flex; align-items: center; gap: 8px; opacity: 0.7;';
-                    li.innerHTML = `<span style="color:var(--text-sec);">⚠</span> <span>${p.label} <span style="opacity:0.6;font-size:11px">(no subtitle)</span></span>`;
-                    list.appendChild(li);
-                });
-
-                addLogEntry('info', null, null, `Batch folder loaded: ${res.pairs.length} pairs ready.`);
-            } finally {
-                btn.textContent = 'Select Folder…';
-                btn.disabled = false;
             }
+        } catch (e) {
+            console.error("[Batch] Error in folder picker:", e);
+            showError("Folder picker error: " + e);
         }
     });
+
+    // Make the empty drop zone clickable too
+    const emptyZone = document.getElementById('batch-empty');
+    if (emptyZone) {
+        emptyZone.addEventListener('click', () => btn.click());
+    }
 }
 
 function showFileInZone(id, path) {
