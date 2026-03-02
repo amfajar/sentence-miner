@@ -52,7 +52,6 @@ def _load_cache() -> tuple[set[str], int, int]:
     Returns (expressions_set, cached_note_count, max_note_id).
     max_note_id is used for incremental refresh (only fetch notes with id > this).
     """
-def _load_cache() -> tuple[set[str], int, int]:
     try:
         if not os.path.exists(_CACHE_FILE):
             return set(), 0, 0

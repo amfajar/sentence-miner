@@ -287,9 +287,10 @@ class Api:
             import srt
             input_type = payload.get('input_type', 'media')
 
-            # ── STEP 1: Get input ──────────────────────────────────────────
-            media_path = None  # video or audio file
+            # ── STEP 1: Get input & STEP 2: Parse into sentences ─────────────
+            media_path = None  # global media if not batch
             srt_path = None
+            sentences = []
 
             if input_type == 'youtube':
                 push({'type': 'status', 'msg': 'Downloading YouTube video...'})
@@ -297,28 +298,29 @@ class Api:
                     payload['youtube_url'], s.temp_dir
                 )
                 push({'type': 'status', 'msg': f'Downloaded: {os.path.basename(media_path)}'})
+                # For youtube, offset is 0
+                sentences.extend(_parse_srt(srt_path, 0, media_path, os.path.basename(media_path)))
+                
             elif input_type == 'media':
                 media_path = payload.get('media_path', '')
                 srt_path = payload.get('srt_path', '')
                 if not os.path.exists(media_path):
                     push({'type': 'error', 'msg': f'Media file not found: {media_path}'})
                     return
-
-            # ── STEP 2: Parse into sentences ───────────────────────────────
-            sentences = []
-            if input_type in ('media', 'youtube'):
-                with open(srt_path, encoding='utf-8', errors='replace') as f:
-                    content = f.read()
-                if srt_path.lower().endswith('.ass'):
-                    content = _strip_ass_tags(content)
-                subs = list(srt.parse(content))
-                for sub in subs:
-                    text = sub.content.replace('\n', '　').strip()
-                    sentences.append({
-                        'text': text,
-                        'start_ms': int(sub.start.total_seconds() * 1000),
-                        'end_ms': int(sub.end.total_seconds() * 1000),
-                    })
+                offset_ms = int(payload.get('sub_offset_ms', 0))
+                sentences.extend(_parse_srt(srt_path, offset_ms, media_path, os.path.basename(media_path)))
+                
+            elif input_type == 'batch':
+                pairs = payload.get('pairs', [])
+                total_pairs = len(pairs)
+                offset_ms = int(payload.get('sub_offset_ms', 0))
+                for i, pair in enumerate(pairs):
+                    mp = pair.get('media_path')
+                    sp = pair.get('srt_path')
+                    lbl = pair.get('label', os.path.basename(mp))
+                    push({'type': 'status', 'msg': f'Parsing episode {i+1}/{total_pairs} — {lbl}...'})
+                    sentences.extend(_parse_srt(sp, offset_ms, mp, lbl))
+                    
             else:  # epub / txt
                 text_path = payload.get('epub_path', '')
                 char_start = int(payload.get('char_start') or 0)
@@ -329,7 +331,7 @@ class Api:
                 label = 'TXT' if ext == '.txt' else 'EPUB'
                 push({'type': 'status', 'msg': f'Extracting sentences from {label}{range_desc}...'})
                 texts = epub.extract_sentences(text_path, char_start, char_end)
-                sentences = [{'text': t, 'start_ms': None, 'end_ms': None} for t in texts]
+                sentences = [{'text': t, 'start_ms': None, 'end_ms': None, 'media_path': None, 'source_name': os.path.basename(text_path)} for t in texts]
 
             push({'type': 'status', 'msg': f'Parsed {len(sentences):,} sentences.'})
 
@@ -420,15 +422,15 @@ class Api:
             skipped_freq = len(freq_skipped_words)
             total = len(results)
 
-            source_name = (
-                Path(media_path).name if media_path
-                else payload.get('youtube_url', '')
-                     or Path(payload.get('epub_path', '')).name
-            )
-
-            audio_only = media_path and media.is_audio_only(media_path)
-            # Fetch media duration once — avoid N ffprobe calls inside the loop
-            media_duration_ms = media.get_media_duration_ms(media_path) if media_path else 0
+            # Cache media format info (avoids ffprobe overhead per candidate in batch processing)
+            media_info_cache = {}
+            for _, occ in results:
+                mp = occ.get('media_path', media_path)
+                if mp and mp not in media_info_cache:
+                    media_info_cache[mp] = {
+                        'audio_only': media.is_audio_only(mp),
+                        'duration_ms': media.get_media_duration_ms(mp)
+                    }
 
             t_batch_start = time.perf_counter()
             _bt_sent_furi = 0.0; _bt_audio_clip = 0.0; _bt_screenshot = 0.0
@@ -546,6 +548,16 @@ class Api:
                 defn = dictionary.lookup_for_reading(self._jitendex, lemma, jitendex_word_reading) or ''
                 _bt_dict_lookup += (time.perf_counter() - _t0) * 1000
 
+                occ_media_path = occ.get('media_path', media_path)
+                source_name = occ.get('source_name') or (
+                    Path(occ_media_path).name if occ_media_path
+                    else payload.get('youtube_url', '') or Path(payload.get('epub_path', '')).name
+                )
+                
+                minfo = media_info_cache.get(occ_media_path, {'audio_only': False, 'duration_ms': 0})
+                audio_only = minfo['audio_only']
+                media_duration_ms = minfo['duration_ms']
+
                 fields = {
                     'Expression': lemma,
                     'ExpressionFurigana': furigana.expression_furigana(lemma, jitendex_word_reading),
@@ -572,8 +584,8 @@ class Api:
                 }
 
                 # Media: extract files now (CPU-bound)
-                if input_type in ('media', 'youtube') and occ['start_ms'] is not None:
-                    uid_str = f"{media_path}_{occ['start_ms']}_{occ['end_ms']}"
+                if input_type in ('media', 'youtube', 'batch') and occ['start_ms'] is not None:
+                    uid_str = f"{occ_media_path}_{occ['start_ms']}_{occ['end_ms']}"
                     uid = hashlib.md5(uid_str.encode('utf-8')).hexdigest()[:8]
                     
                     try:
@@ -610,7 +622,7 @@ class Api:
                                 return ('media', el)
                                 
                             extract_futs.append(extract_pool.submit(
-                                _do_media, media_path, occ['start_ms'], occ['end_ms'],
+                                _do_media, occ_media_path, occ['start_ms'], occ['end_ms'],
                                 clip_path if do_audio else None, clip_name,
                                 frame_path if do_frame else None, frame_name,
                                 fields, use_direct_write
@@ -742,6 +754,24 @@ class Api:
 
     # ── Scan & Preview ─────────────────────────────────────────────────────────
 
+def _parse_srt(srt_path: str, offset_ms: int, media_path: str, label: str) -> list[dict]:
+    import srt
+    with open(srt_path, encoding='utf-8', errors='replace') as f:
+        content = f.read()
+    if srt_path.lower().endswith('.ass'):
+        content = _strip_ass_tags(content)
+    subs = list(srt.parse(content))
+    out = []
+    for sub in subs:
+        text = sub.content.replace('\n', '　').strip()
+        start_ms = max(0, int(sub.start.total_seconds() * 1000) - offset_ms)
+        end_ms = max(0, int(sub.end.total_seconds() * 1000) - offset_ms)
+        out.append({
+            'text': text, 'start_ms': start_ms, 'end_ms': end_ms,
+            'media_path': media_path, 'source_name': label
+        })
+    return out
+
     def scan_candidates(self, payload: dict) -> dict:
         """
         Scan the source and return all candidate words with their best sentence
@@ -769,29 +799,32 @@ class Api:
 
             if input_type == 'youtube':
                 media_path, srt_path = youtube.download(payload['youtube_url'], s.temp_dir)
+                label = Path(media_path).name
+                sentences.extend(_parse_srt(srt_path, 0, media_path, label))
             elif input_type == 'media':
                 media_path = payload.get('media_path', '')
                 srt_path = payload.get('srt_path', '')
-
-            if input_type in ('media', 'youtube'):
-                with open(srt_path, encoding='utf-8', errors='replace') as f:
-                    content = f.read()
-                if srt_path.lower().endswith('.ass'):
-                    content = _strip_ass_tags(content)
-                subs = list(srt.parse(content))
-                offset_ms = int(payload.get('sub_offset_ms', 0)) if input_type == 'media' else 0
-                for sub in subs:
-                    text = sub.content.replace('\n', '　').strip()
-                    start_ms = max(0, int(sub.start.total_seconds() * 1000) - offset_ms)
-                    end_ms = max(0, int(sub.end.total_seconds() * 1000) - offset_ms)
-                    sentences.append({'text': text, 'start_ms': start_ms, 'end_ms': end_ms})
+                label = Path(media_path).name if media_path else ''
+                offset_ms = int(payload.get('sub_offset_ms', 0))
+                sentences.extend(_parse_srt(srt_path, offset_ms, media_path, label))
+            elif input_type == 'batch':
+                pairs = payload.get('pairs', [])
+                total_pairs = len(pairs)
+                offset_ms = int(payload.get('sub_offset_ms', 0))
+                for i, pair in enumerate(pairs):
+                    mp = pair.get('media_path')
+                    sp = pair.get('srt_path')
+                    lbl = pair.get('label', os.path.basename(mp))
+                    self._push({'type': 'status', 'msg': f'Scanning episode {i+1}/{total_pairs} — {lbl}...'})
+                    sentences.extend(_parse_srt(sp, offset_ms, mp, lbl))
             else:  # epub / txt
                 text_path = payload.get('epub_path', '')
                 char_start = int(payload.get('char_start') or 0)
                 char_end_raw = payload.get('char_end')
                 char_end = int(char_end_raw) if char_end_raw else None
                 texts = epub.extract_sentences(text_path, char_start, char_end)
-                sentences = [{'text': t, 'start_ms': None, 'end_ms': None} for t in texts]
+                lbl = Path(text_path).name
+                sentences = [{'text': t, 'start_ms': None, 'end_ms': None, 'media_path': None, 'source_name': lbl} for t in texts]
 
             # ── Step 2: collect candidates ─────────────────────────────────
             # Phase 2a: tokenize all sentences, collect freq-passing lemmas
@@ -820,8 +853,11 @@ class Api:
 
                     if lemma not in freq_passing:
                         freq_passing[lemma] = []
-                    freq_passing[lemma].append({'text': sent['text'], 'start_ms': sent['start_ms'],
-                                               'end_ms': sent['end_ms'], 'token': token, 'rank': rank})
+                    freq_passing[lemma].append({
+                        'text': sent['text'], 'start_ms': sent['start_ms'],
+                        'end_ms': sent['end_ms'], 'token': token, 'rank': rank,
+                        'media_path': sent.get('media_path'), 'source_name': sent.get('source_name')
+                    })
 
             # Phase 2b: batch dictionary existence check (ONE SQL query)
             _t0 = time.perf_counter()
@@ -1059,3 +1095,67 @@ class Api:
         except Exception as e:
             print(f"[api] pick_file error: {e}")
             return None
+
+    def pick_folder(self) -> str | None:
+        """Open native folder dialog. Returns selected path or None."""
+        try:
+            result = webview.windows[0].create_file_dialog(webview.FileDialog.FOLDER)
+            if result and len(result) > 0:
+                return result[0]
+            return None
+        except Exception as e:
+            print(f"[api] pick_folder error: {e}")
+            return None
+
+    def scan_folder_for_pairs(self, folder_path: str) -> dict:
+        """Scan a folder and group video and subtitle files by filename stem."""
+        try:
+            if not os.path.exists(folder_path):
+                return {'ok': False, 'error': 'Folder not found.'}
+            
+            videos = {}
+            subs = {}
+            
+            valid_vid_ext = {'.mp4', '.mkv', '.avi'}
+            valid_sub_ext = {'.srt', '.ass'}
+            
+            for f in os.listdir(folder_path):
+                f_path = os.path.join(folder_path, f)
+                if not os.path.isfile(f_path):
+                    continue
+                    
+                stem, ext = os.path.splitext(f)
+                ext = ext.lower()
+                
+                if ext in valid_vid_ext:
+                    videos[stem] = f_path
+                elif ext in valid_sub_ext:
+                    subs[stem] = f_path
+                    
+            pairs = []
+            unpaired_vids = []
+            
+            for stem in sorted(set(videos.keys()) | set(subs.keys())):
+                vid = videos.get(stem)
+                sub = subs.get(stem)
+                
+                if vid and sub:
+                    pairs.append({
+                        'label': f"{stem}",
+                        'media_path': vid,
+                        'srt_path': sub
+                    })
+                elif vid:
+                    unpaired_vids.append({
+                        'label': f"{stem}",
+                        'media_path': vid
+                    })
+                    
+            return {
+                'ok': True,
+                'folder': folder_path,
+                'pairs': pairs,
+                'unpaired_vids': unpaired_vids
+            }
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}

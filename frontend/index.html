@@ -43,6 +43,7 @@
                 <div class="source-tabs" role="group" aria-label="Input type">
                     <button class="source-btn active" data-source="media" id="src-media">🎵 Media</button>
                     <button class="source-btn" data-source="youtube" id="src-youtube">▶ YouTube</button>
+                    <button class="source-btn" data-source="batch" id="src-batch">🍿 Batch</button>
                     <button class="source-btn" data-source="epub" id="src-epub">📖 EPUB/TXT</button>
                 </div>
             </section>
@@ -123,6 +124,44 @@
                 </div>
             </section>
 
+            <!-- Batch folder selector -->
+            <section class="section hidden" id="batch-section">
+                <div class="section-label" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span>BATCH FOLDER</span>
+                    <button class="secondary-btn" id="batch-pick-btn" style="font-size: 11px; padding: 4px 8px;">Select
+                        Folder…</button>
+                </div>
+                <!-- Empty state initially -->
+                <div id="batch-empty" class="drop-zone"
+                    style="height:auto; min-height:80px; padding:20px; text-align:center;">
+                    <div class="drop-icon" aria-hidden="true" style="font-size: 24px;">📁</div>
+                    <div class="drop-hint" style="margin-top: 5px;">Select a folder containing video + subtitle pairs.
+                    </div>
+                </div>
+
+                <!-- Populate via JS -->
+                <div id="batch-pairs-container" class="hidden"
+                    style="margin-top: 10px; border: 1px solid var(--border); border-radius: 6px; overflow:hidden;">
+                    <div
+                        style="background:var(--bg-mid); padding:8px 12px; font-size:11px; font-weight:600; color:var(--text-sec); border-bottom:1px solid var(--border);">
+                        Discovered Episode Pairs
+                    </div>
+                    <ul id="batch-pairs-list"
+                        style="list-style:none; padding:0; margin:0; max-height:200px; overflow-y:auto; background:var(--bg-lite);">
+                        <!-- <li>✓ Non Non Biyori 01</li> -->
+                    </ul>
+                </div>
+
+                <!-- Subtitle offset (applies to all pairs in batch) -->
+                <div class="epub-range-row" style="margin-top:10px" id="batch-sub-offset-container">
+                    <div class="epub-range-inputs" style="align-items:center;gap:8px">
+                        <span class="freq-label">Subtitle offset</span>
+                        <input type="number" id="batch-sub-offset" class="text-input narrow" value="0" step="0.1"
+                            placeholder="0" title="Applies broadly to all episodes.">
+                        <span class="range-label" style="opacity:0.6">sec</span>
+                    </div>
+                </div>
+            </section>
             <!-- Frequency filter -->
             <section class="section">
                 <div class="section-label">FREQUENCY FILTER</div>
