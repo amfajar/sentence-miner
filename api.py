@@ -397,6 +397,8 @@ class Api:
                         'text': sent['text'],
                         'start_ms': sent['start_ms'],
                         'end_ms': sent['end_ms'],
+                        'media_path': sent.get('media_path'),
+                        'source_name': sent.get('source_name'),
                         'token': token,
                         'rank': rank,
                     })
@@ -604,50 +606,53 @@ class Api:
 
                 # Media: extract files now (CPU-bound)
                 if input_type in ('media', 'youtube', 'batch') and occ['start_ms'] is not None:
-                    uid_str = f"{occ_media_path}_{occ['start_ms']}_{occ['end_ms']}"
-                    uid = hashlib.md5(uid_str.encode('utf-8')).hexdigest()[:8]
-                    
-                    try:
-                        clip_name = f"sm_{lemma}_{uid}_clip.mp3"
-                        clip_path = os.path.join(media_dir if use_direct_write else s.temp_dir, clip_name)
-                        clip_exists = clip_name in existing_media
-                        if clip_exists:
-                            fields['SentenceAudio'] = f"[sound:{clip_name}]"
-                            
-                        frame_name = f"sm_{lemma}_{uid}_frame.jpg"
-                        frame_path = os.path.join(media_dir if use_direct_write else s.temp_dir, frame_name)
-                        frame_exists = frame_name in existing_media
-                        if not audio_only and frame_exists:
-                            fields['Picture'] = f"<img src='{frame_name}'>"
-
-                        do_audio = not clip_exists
-                        do_frame = not audio_only and not frame_exists
+                    if not occ_media_path or not os.path.exists(occ_media_path):
+                        print(f"[api] Warning: Video path {occ_media_path} missing or invalid for '{lemma}'. Skipping media extraction.")
+                    else:
+                        uid_str = f"{occ_media_path}_{occ['start_ms']}_{occ['end_ms']}"
+                        uid = hashlib.md5(uid_str.encode('utf-8')).hexdigest()[:8]
                         
-                        if do_audio or do_frame:
-                            def _do_media(mp, start, end, ap, anam, fp, fnam, flds, direct):
-                                _t = time.perf_counter()
-                                media.extract_media(mp, start, end, ap, fp, s.clip_padding_ms, media_duration_ms)
-                                el = (time.perf_counter() - _t) * 1000
-                                if ap:
-                                    if direct:
-                                        flds['SentenceAudio'] = f"[sound:{anam}]"
-                                    else:
-                                        upload_queue.put((ap, flds, 'SentenceAudio', anam))
-                                if fp:
-                                    if direct:
-                                        flds['Picture'] = f"<img src='{fnam}'>"
-                                    else:
-                                        upload_queue.put((fp, flds, 'Picture', fnam))
-                                return ('media', el)
+                        try:
+                            clip_name = f"sm_{lemma}_{uid}_clip.mp3"
+                            clip_path = os.path.join(media_dir if use_direct_write else s.temp_dir, clip_name)
+                            clip_exists = clip_name in existing_media
+                            if clip_exists:
+                                fields['SentenceAudio'] = f"[sound:{clip_name}]"
                                 
-                            extract_futs.append(extract_pool.submit(
-                                _do_media, occ_media_path, occ['start_ms'], occ['end_ms'],
-                                clip_path if do_audio else None, clip_name,
-                                frame_path if do_frame else None, frame_name,
-                                fields, use_direct_write
-                            ))
-                    except Exception as e:
-                        print(f"[api] Media extract error for {lemma}: {e}")
+                            frame_name = f"sm_{lemma}_{uid}_frame.jpg"
+                            frame_path = os.path.join(media_dir if use_direct_write else s.temp_dir, frame_name)
+                            frame_exists = frame_name in existing_media
+                            if not audio_only and frame_exists:
+                                fields['Picture'] = f"<img src='{frame_name}'>"
+
+                            do_audio = not clip_exists
+                            do_frame = not audio_only and not frame_exists
+                            
+                            if do_audio or do_frame:
+                                def _do_media(mp, start, end, ap, anam, fp, fnam, flds, direct):
+                                    _t = time.perf_counter()
+                                    media.extract_media(mp, start, end, ap, fp, s.clip_padding_ms, media_duration_ms)
+                                    el = (time.perf_counter() - _t) * 1000
+                                    if ap:
+                                        if direct:
+                                            flds['SentenceAudio'] = f"[sound:{anam}]"
+                                        else:
+                                            upload_queue.put((ap, flds, 'SentenceAudio', anam))
+                                    if fp:
+                                        if direct:
+                                            flds['Picture'] = f"<img src='{fnam}'>"
+                                        else:
+                                            upload_queue.put((fp, flds, 'Picture', fnam))
+                                    return ('media', el)
+                                    
+                                extract_futs.append(extract_pool.submit(
+                                    _do_media, occ_media_path, occ['start_ms'], occ['end_ms'],
+                                    clip_path if do_audio else None, clip_name,
+                                    frame_path if do_frame else None, frame_name,
+                                    fields, use_direct_write
+                                ))
+                        except Exception as e:
+                            print(f"[api] Media extract error for {lemma}: {e}")
 
                 # Word audio
                 if s.use_word_audio:
@@ -718,7 +723,7 @@ class Api:
             print(f'[perf]    Word audio HTTP (all):             {_bt_word_audio:.0f}ms')
             print(f'[perf]    Phase total:                       {t_extract_ms:.0f}ms')
 
-            # ── Phase 2: Batch addNotes — ONE HTTP call for everything ──────
+            # ── Phase 2: Batch addNotes — Chunked for stability ──────
             push({'type': 'status', 'msg': f'Sending {len(pending)} notes to Anki...'})
             note_dicts = [
                 {
@@ -730,10 +735,28 @@ class Api:
                 }
                 for _, _, _, fields in pending
             ]
-            _t0 = time.perf_counter()
-            note_ids = anki.add_notes_batch(s.ankiconnect_url, note_dicts)
-            _dt_batch = (time.perf_counter() - _t0) * 1000
-            print(f'[perf]    addNotes batch ({len(note_dicts)} notes):        {_dt_batch:.0f}ms')
+            
+            note_ids = []
+            BATCH_CHUNK_SIZE = 50
+            total_chunks = (len(note_dicts) + BATCH_CHUNK_SIZE - 1) // BATCH_CHUNK_SIZE
+            _dt_batch_total = 0
+            
+            for i in range(0, len(note_dicts), BATCH_CHUNK_SIZE):
+                chunk = note_dicts[i:i + BATCH_CHUNK_SIZE]
+                chunk_idx = i // BATCH_CHUNK_SIZE + 1
+                msg = f'Sending chunk {chunk_idx}/{total_chunks} ({len(chunk)} notes) to Anki...'
+                push({'type': 'status', 'msg': msg})
+                print(f'[anki] {msg}')
+                
+                _t0 = time.perf_counter()
+                ids = anki.add_notes_batch(s.ankiconnect_url, chunk)
+                _dt_batch_total += (time.perf_counter() - _t0) * 1000
+                note_ids.extend(ids)
+                
+                if chunk_idx < total_chunks:
+                    time.sleep(0.1)  # 100ms delay to let Anki breathe
+                    
+            print(f'[perf]    addNotes chunked ({len(note_dicts)} notes):        {_dt_batch_total:.0f}ms')
 
             # ── Phase 3: Process results and push log events ─────────────────
             for (lemma, jitendex_word_reading, rank, _), note_id in zip(pending, note_ids):
