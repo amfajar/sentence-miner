@@ -77,6 +77,7 @@ class Api:
         self._freq_dict: FrequencyDB | None = None
         self._running = False
         self._nlp_ready = False
+        self._anki_media_dir: str | None = None
 
     # ── Settings ──────────────────────────────────────────────────────────────
 
@@ -118,6 +119,12 @@ class Api:
                 return {'ok': False, 'error': 'AnkiConnect not responding.'}
             decks = anki.get_deck_names(self._settings.ankiconnect_url)
             models = anki.get_model_names(self._settings.ankiconnect_url)
+            try:
+                res = anki._request(self._settings.ankiconnect_url, 'getMediaDirPath')
+                if res and os.path.exists(res):
+                    self._anki_media_dir = res
+            except Exception:
+                pass
             # Reuse in-memory known words if already loaded by background refresh.
             # Only do a full fetch when the set is empty (first app launch, cache miss).
             if not self._known_words:
@@ -230,6 +237,13 @@ class Api:
             if ok:
                 decks = anki.get_deck_names(self._settings.ankiconnect_url)
                 models = anki.get_model_names(self._settings.ankiconnect_url)
+
+                try:
+                    res = anki._request(self._settings.ankiconnect_url, 'getMediaDirPath')
+                    if res and os.path.exists(res):
+                        self._anki_media_dir = res
+                except Exception:
+                    pass
 
                 # Init SudachiPy tokenizer eagerly so the first scan doesn't
                 # pay the ~3s cold-start cost during the user's scan.
@@ -466,18 +480,21 @@ class Api:
             # If we don't need ANY media, skip connecting to Anki for media
             needs_media = input_type in ('media', 'youtube', 'batch') or s.use_word_audio
             if needs_media:
-                try:
-                    media_dir_res = anki._request(s.ankiconnect_url, 'getMediaDirPath')
-                    if media_dir_res and os.path.exists(media_dir_res):
-                        media_dir = media_dir_res
-                        # Use lightning fast os.listdir if we have the directory
-                        existing_media = set(f for f in os.listdir(media_dir) if f.startswith('sm_') or f.startswith('yomi_'))
-                    else:
-                        # Fallback for old AnkiConnect versions
-                        msg = anki._request(s.ankiconnect_url, 'getMediaFilesNames', pattern='sm_*')
-                        if msg: existing_media = set(msg)
-                except Exception as e:
-                    print(f"[api] AnkiConnect pre-flight checks failed: {e}")
+                if self._anki_media_dir and os.path.exists(self._anki_media_dir):
+                    media_dir = self._anki_media_dir
+                    existing_media = set(f for f in os.listdir(media_dir) if f.startswith('sm_') or f.startswith('yomi_'))
+                else:
+                    try:
+                        media_dir_res = anki._request(s.ankiconnect_url, 'getMediaDirPath')
+                        if media_dir_res and os.path.exists(media_dir_res):
+                            self._anki_media_dir = media_dir = media_dir_res
+                            existing_media = set(f for f in os.listdir(media_dir) if f.startswith('sm_') or f.startswith('yomi_'))
+                        else:
+                            # Fallback for old AnkiConnect versions
+                            msg = anki._request(s.ankiconnect_url, 'getMediaFilesNames', pattern='sm_*')
+                            if msg: existing_media = set(msg)
+                    except Exception as e:
+                        print(f"[api] AnkiConnect pre-flight checks failed: {e}")
             
             _bt_media_init = (time.perf_counter() - _t0) * 1000
 
@@ -518,7 +535,7 @@ class Api:
                 for _ in range(8):
                     pool.submit(_upload_worker)
                 
-            extract_pool = ThreadPoolExecutor(max_workers=8)
+            extract_pool = ThreadPoolExecutor(max_workers=16 if input_type == 'batch' else 8)
             extract_futs = []
 
             push({'type': 'status', 'msg': f'Building {total} cards...'})
