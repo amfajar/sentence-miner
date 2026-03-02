@@ -49,6 +49,25 @@ def _best_reading(jitendex_db, freq_db, lemma: str, sudachi_reading: str) -> str
     return frequency.get_best_reading(freq_db, candidates) or sudachi_reading
 
 
+def _parse_srt(srt_path: str, offset_ms: int, media_path: str, label: str) -> list[dict]:
+    import srt
+    with open(srt_path, encoding='utf-8', errors='replace') as f:
+        content = f.read()
+    if srt_path.lower().endswith('.ass'):
+        content = _strip_ass_tags(content)
+    subs = list(srt.parse(content))
+    out = []
+    for sub in subs:
+        text = sub.content.replace('\n', '　').strip()
+        start_ms = max(0, int(sub.start.total_seconds() * 1000) - offset_ms)
+        end_ms = max(0, int(sub.end.total_seconds() * 1000) - offset_ms)
+        out.append({
+            'text': text, 'start_ms': start_ms, 'end_ms': end_ms,
+            'media_path': media_path, 'source_name': label
+        })
+    return out
+
+
 class Api:
     def __init__(self):
         self._settings = settings_module.load()
@@ -753,24 +772,6 @@ class Api:
             self._running = False
 
     # ── Scan & Preview ─────────────────────────────────────────────────────────
-
-def _parse_srt(srt_path: str, offset_ms: int, media_path: str, label: str) -> list[dict]:
-    import srt
-    with open(srt_path, encoding='utf-8', errors='replace') as f:
-        content = f.read()
-    if srt_path.lower().endswith('.ass'):
-        content = _strip_ass_tags(content)
-    subs = list(srt.parse(content))
-    out = []
-    for sub in subs:
-        text = sub.content.replace('\n', '　').strip()
-        start_ms = max(0, int(sub.start.total_seconds() * 1000) - offset_ms)
-        end_ms = max(0, int(sub.end.total_seconds() * 1000) - offset_ms)
-        out.append({
-            'text': text, 'start_ms': start_ms, 'end_ms': end_ms,
-            'media_path': media_path, 'source_name': label
-        })
-    return out
 
     def scan_candidates(self, payload: dict) -> dict:
         """
