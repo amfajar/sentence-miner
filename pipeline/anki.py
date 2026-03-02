@@ -342,13 +342,14 @@ def fetch_all_expressions_in_deck(url: str, deck_name: str) -> set[str]:
         return set()
 
 
-def upload_media(url: str, filepath: str) -> str:
+def upload_media(url: str, filepath: str, target_name: str | None = None) -> str:
     """
     Upload a file to Anki's media collection via AnkiConnect.
+    If target_name is provided, it will be saved as that name instead of the local basename.
     Returns the filename as stored.
     Deletes the local file after successful upload.
     """
-    filename = os.path.basename(filepath)
+    filename = target_name if target_name else os.path.basename(filepath)
     with open(filepath, 'rb') as f:
         data = base64.b64encode(f.read()).decode()
 

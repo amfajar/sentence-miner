@@ -8,6 +8,8 @@ import os
 import re
 import threading
 import time
+import hashlib
+import queue
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
@@ -431,12 +433,49 @@ class Api:
             t_batch_start = time.perf_counter()
             _bt_sent_furi = 0.0; _bt_audio_clip = 0.0; _bt_screenshot = 0.0
             _bt_word_audio = 0.0; _bt_upload = 0.0
+            
+            # Pre-fetch existing media starting with "sm_" to skip re-uploads
+            existing_media = set()
+            try:
+                msg = anki._request(s.ankiconnect_url, 'getMediaFilesNames', pattern='sm_*')
+                if msg: existing_media = set(msg)
+            except Exception:
+                pass
 
-            # ── Phase 1: Build all payloads + extract media ──────────────────
-            # Fast loop — extract media files (CPU-bound ffmpeg), no uploads yet.
-            # Collect all (local_path, fields_dict, field_key) into `uploads`.
+            # ── Phase 1: Build + Extract + Concurrent Upload ────────────────
+            # ffmpeg extracts files and puts them in an upload queue.
+            # 24 background threads consume the queue and upload to Anki immediately.
             pending: list[tuple[str, str, int, dict]] = []  # (lemma, reading, rank, fields)
-            uploads: list[tuple[str, dict, str]] = []  # (local_path, fields_ref, field_key)
+            upload_queue = queue.Queue()
+            
+            def _upload_worker():
+                while True:
+                    item = upload_queue.get()
+                    if item is None:
+                        upload_queue.task_done()
+                        break
+                    local_path, fields_ref, field_key, target_name = item
+                    try:
+                        size_kb = os.path.getsize(local_path) // 1024
+                        _t = time.perf_counter()
+                        # Pass custom filename to upload_media to ensure it saves as target_name
+                        stored_name = anki.upload_media(s.ankiconnect_url, local_path, target_name)
+                        elapsed_ms = (time.perf_counter() - _t) * 1000
+                        print(f'[perf] Upload "{target_name}": {size_kb}KB → {elapsed_ms:.0f}ms')
+                        
+                        if field_key in ('SentenceAudio', 'ExpressionAudio'):
+                            fields_ref[field_key] = f'[sound:{stored_name}]'
+                        elif field_key == 'Picture':
+                            fields_ref[field_key] = f"<img src='{stored_name}'>"
+                    except Exception as e:
+                        print(f'[api] Upload error ({target_name}): {e}')
+                    finally:
+                        upload_queue.task_done()
+
+            # Start upload workers
+            pool = ThreadPoolExecutor(max_workers=24)
+            for _ in range(24):
+                pool.submit(_upload_worker)
 
             push({'type': 'status', 'msg': f'Building {total} cards...'})
 
@@ -506,85 +545,82 @@ class Api:
                     'MiscInfo': source_name,
                 }
 
-                # Media: extract files now (CPU-bound), upload later in parallel
+                # Media: extract files now (CPU-bound), send to upload queue
                 if input_type in ('media', 'youtube') and occ['start_ms'] is not None:
-                    uid = uuid4().hex[:8]
+                    # Deterministic UUID based on media source and timestamp
+                    uid_str = f"{media_path}_{occ['start_ms']}_{occ['end_ms']}"
+                    uid = hashlib.md5(uid_str.encode('utf-8')).hexdigest()[:8]
+                    
                     try:
-                        _t0 = time.perf_counter()
-                        clip_path = os.path.join(s.temp_dir, f"{lemma}_{uid}_clip.mp3")
-                        media.extract_audio_clip(
-                            media_path, occ['start_ms'], occ['end_ms'],
-                            clip_path, s.clip_padding_ms, media_duration_ms,
-                        )
-                        _bt_audio_clip += (time.perf_counter() - _t0) * 1000
-                        uploads.append((clip_path, fields, 'SentenceAudio'))
+                        clip_name = f"sm_{lemma}_{uid}_clip.mp3"
+                        if clip_name in existing_media:
+                            fields['SentenceAudio'] = f"[sound:{clip_name}]"
+                        else:
+                            _t0 = time.perf_counter()
+                            clip_path = os.path.join(s.temp_dir, clip_name)
+                            media.extract_audio_clip(
+                                media_path, occ['start_ms'], occ['end_ms'],
+                                clip_path, s.clip_padding_ms, media_duration_ms,
+                            )
+                            _bt_audio_clip += (time.perf_counter() - _t0) * 1000
+                            upload_queue.put((clip_path, fields, 'SentenceAudio', clip_name))
                     except Exception as e:
                         print(f"[api] Audio clip error for {lemma}: {e}")
 
                     if not audio_only:
                         try:
-                            _t0 = time.perf_counter()
-                            frame_path = os.path.join(s.temp_dir, f"{lemma}_{uid}_frame.jpg")
-                            media.extract_frame(media_path, occ['start_ms'], occ['end_ms'], frame_path)
-                            _bt_screenshot += (time.perf_counter() - _t0) * 1000
-                            uploads.append((frame_path, fields, 'Picture'))
+                            frame_name = f"sm_{lemma}_{uid}_frame.jpg"
+                            if frame_name in existing_media:
+                                fields['Picture'] = f"<img src='{frame_name}'>"
+                            else:
+                                _t0 = time.perf_counter()
+                                frame_path = os.path.join(s.temp_dir, frame_name)
+                                media.extract_frame(media_path, occ['start_ms'], occ['end_ms'], frame_path)
+                                _bt_screenshot += (time.perf_counter() - _t0) * 1000
+                                upload_queue.put((frame_path, fields, 'Picture', frame_name))
                         except Exception as e:
                             print(f"[api] Frame error for {lemma}: {e}")
 
-                # Word audio (HTTP fetch — also deferred to parallel upload phase)
+                # Word audio
                 if s.use_word_audio:
                     try:
-                        _t0 = time.perf_counter()
-                        audio_path = audio_sources.fetch_word_audio(lemma, token['reading'], s.temp_dir)
-                        _bt_word_audio += (time.perf_counter() - _t0) * 1000
-                        if audio_path:
-                            uploads.append((audio_path, fields, 'ExpressionAudio'))
+                        word_uid = hashlib.md5(f"{lemma}_{token['reading']}".encode('utf-8')).hexdigest()[:8]
+                        audio_name = f"sm_word_{lemma}_{word_uid}.mp3"
+                        
+                        if audio_name in existing_media:
+                            fields['ExpressionAudio'] = f"[sound:{audio_name}]"
+                        else:
+                            _t0 = time.perf_counter()
+                            audio_path = audio_sources.fetch_word_audio(lemma, token['reading'], s.temp_dir)
+                            _bt_word_audio += (time.perf_counter() - _t0) * 1000
+                            if audio_path:
+                                # rename the downloaded file to target name
+                                new_path = os.path.join(s.temp_dir, audio_name)
+                                os.rename(audio_path, new_path)
+                                upload_queue.put((new_path, fields, 'ExpressionAudio', audio_name))
                     except Exception as e:
                         print(f"[api] Word audio error for {lemma}: {e}")
 
                 pending.append((lemma, jitendex_word_reading, rank, fields))
+            
+            # Close the extraction loop
+            # Send stop signals to workers and wait for queue to empty
+            for _ in range(24):
+                upload_queue.put(None)
+            
+            _t0 = time.perf_counter()
+            upload_queue.join()  # blocks until all items are processed by workers
+            pool.shutdown(wait=True)
+            _bt_upload = (time.perf_counter() - _t0) * 1000
 
             t_extract_ms = (time.perf_counter() - t_batch_start) * 1000
-            print(f'[perf] ── Extract phase ({len(pending)} words, {len(uploads)} media files) ──')
+            print(f'[perf] ── Extract & Upload phase ({len(pending)} notes) ──')
             print(f'[perf]    Sentence furigana (all):           {_bt_sent_furi:.0f}ms')
             print(f'[perf]    Audio clip ffmpeg (all):           {_bt_audio_clip:.0f}ms')
             print(f'[perf]    Screenshot ffmpeg (all):           {_bt_screenshot:.0f}ms')
             print(f'[perf]    Word audio HTTP (all):             {_bt_word_audio:.0f}ms')
-            print(f'[perf]    Extract phase total:               {t_extract_ms:.0f}ms')
-
-            # ── Phase 1b: Parallel media uploads ────────────────────────────
-            # All files are ready on disk. Upload concurrently to AnkiConnect.
-            # AnkiConnect is a local HTTP server and handles concurrent requests fine.
-            if uploads:
-                push({'type': 'status', 'msg': f'Uploading {len(uploads)} media files...'})
-
-                def _upload_one(args):
-                    local_path, fields_ref, field_key = args
-                    try:
-                        size_kb = os.path.getsize(local_path) // 1024
-                        _t = time.perf_counter()
-                        stored_name = anki.upload_media(s.ankiconnect_url, local_path)
-                        elapsed_ms = (time.perf_counter() - _t) * 1000
-                        fname = os.path.basename(local_path)
-                        print(f'[perf] Upload "{fname}": {size_kb}KB → {elapsed_ms:.0f}ms')
-                        if field_key == 'SentenceAudio':
-                            fields_ref[field_key] = f'[sound:{stored_name}]'
-                        elif field_key == 'Picture':
-                            fields_ref[field_key] = f"<img src='{stored_name}'>"
-                        elif field_key == 'ExpressionAudio':
-                            fields_ref[field_key] = f'[sound:{stored_name}]'
-                        return elapsed_ms
-                    except Exception as e:
-                        print(f'[api] Upload error ({os.path.basename(local_path)}): {e}')
-                        return 0
-
-                _t0 = time.perf_counter()
-                with ThreadPoolExecutor(max_workers=8) as pool:
-                    futs = [pool.submit(_upload_one, u) for u in uploads]
-                    elapsed_list = [f.result() for f in futs]
-                _bt_upload = (time.perf_counter() - _t0) * 1000
-                print(f'[perf]    Parallel uploads ({len(uploads)} files, 8 workers):  {_bt_upload:.0f}ms'
-                      f'  (sequential would have been ~{sum(elapsed_list):.0f}ms)')
+            print(f'[perf]    Trailing upload wait:              {_bt_upload:.0f}ms')
+            print(f'[perf]    Phase total:                       {t_extract_ms:.0f}ms')
 
             # ── Phase 2: Batch addNotes — ONE HTTP call for everything ──────
             push({'type': 'status', 'msg': f'Sending {len(pending)} notes to Anki...'})
