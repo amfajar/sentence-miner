@@ -19,9 +19,13 @@ import webview
 
 import settings as settings_module
 from pipeline import nlp, furigana, dictionary, frequency, anki, audio_sources, media, youtube, epub
+from pipeline import sudachi_setup
 from pipeline.dictionary import DictionaryDB
 from pipeline.frequency import FrequencyDB
 from pipeline.youtube import NoManualSubtitlesError
+import logging
+
+log = logging.getLogger('SentenceMiner.api')
 
 
 def _strip_ass_tags(text: str) -> str:
@@ -180,6 +184,53 @@ class Api:
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
+    # ── SudachiDict setup ──────────────────────────────────────────────────────
+
+    def check_sudachi(self) -> dict:
+        """
+        Check whether SudachiDict is already installed in APPDATA.
+        Returns {installed: bool, dict_size: str|None}
+        """
+        try:
+            installed = sudachi_setup.is_dict_installed()
+            size = sudachi_setup.get_installed_size() if installed else None
+            return {'installed': installed, 'dict_size': size}
+        except Exception as e:
+            return {'installed': False, 'dict_size': None, 'error': str(e)}
+
+    def download_sudachi(self, size: str) -> None:
+        """
+        Start downloading SudachiDict in a background thread.
+        Progress is pushed to the frontend via onProgress events:
+          {type: 'sudachi_progress', downloaded: int, total: int, pct: float}
+          {type: 'sudachi_done'}
+          {type: 'sudachi_error', msg: str}
+        size: 'small' | 'full'
+        """
+        def _progress(downloaded: int, total: int):
+            pct = round((downloaded / total * 100) if total else 0, 1)
+            self._push({'type': 'sudachi_progress',
+                        'downloaded': downloaded,
+                        'total': total,
+                        'pct': pct})
+
+        def _done():
+            self._push({'type': 'sudachi_done'})
+
+        def _error(msg: str):
+            self._push({'type': 'sudachi_error', 'msg': msg})
+
+        sudachi_setup.download_and_install(
+            size,
+            on_progress=_progress,
+            on_done=_done,
+            on_error=_error,
+        )
+
+    def cancel_sudachi_download(self) -> None:
+        """Cancel an in-progress SudachiDict download."""
+        sudachi_setup.cancel_download()
+
     # ── Initialize ────────────────────────────────────────────────────────────
 
     def initialize(self) -> dict:
@@ -200,10 +251,27 @@ class Api:
         if not self._nlp_ready:
             _push("Initializing Japanese tokenizer (SudachiPy)...")
             try:
-                nlp.init()
+                resource_dir = sudachi_setup.get_sudachi_dir() if sudachi_setup.is_dict_installed() else None
+                logging.info(f'SudachiPy init: resource_dir={resource_dir}')
+                
+                if resource_dir and os.path.exists(resource_dir):
+                    logging.info('Sudachi folder contents:')
+                    for fname in os.listdir(resource_dir):
+                        fpath = os.path.join(resource_dir, fname)
+                        if os.path.isfile(fpath):
+                            fsize_kb = os.path.getsize(fpath) / 1024
+                            if fsize_kb > 1024:
+                                logging.info(f'  {fname} ({fsize_kb/1024:.1f} MB)')
+                            else:
+                                logging.info(f'  {fname} ({fsize_kb:.1f} KB)')
+
+                nlp.init(resource_dir=resource_dir)
+
                 self._nlp_ready = True
+                logging.info('SudachiPy initialized successfully')
                 _push("Tokenizer ready.")
             except Exception as e:
+                logging.error(f'SudachiPy init failed: {e}', exc_info=True)
                 errors.append(f"SudachiPy init failed: {e}")
 
         # Jitendex
@@ -212,10 +280,13 @@ class Api:
             _push(f"Loading Jitendex dictionary...")
             try:
                 self._jitendex = dictionary.load(jitendex_path)
+                logging.info(f'Jitendex loaded: {len(self._jitendex):,} entries from {jitendex_path}')
                 _push(f"Jitendex: {len(self._jitendex):,} entries loaded.")
             except Exception as e:
+                logging.error(f'Jitendex load failed: {e}', exc_info=True)
                 errors.append(f"Jitendex load failed: {e}")
         else:
+            logging.warning(f'Jitendex not configured (path={jitendex_path!r})')
             _push("⚠ Jitendex not configured. Go to Settings to import it.")
 
         # JPDB frequency
@@ -224,17 +295,22 @@ class Api:
             _push(f"Loading JPDB frequency dictionary...")
             try:
                 self._freq_dict = frequency.load(freq_path)
+                logging.info(f'Freq dict loaded: {len(self._freq_dict):,} entries from {freq_path}')
                 _push(f"JPDB freq: {len(self._freq_dict):,} entries loaded.")
             except Exception as e:
+                logging.error(f'Freq dict load failed: {e}', exc_info=True)
                 errors.append(f"JPDB freq load failed: {e}")
         else:
+            logging.warning(f'Freq dict not configured (path={freq_path!r})')
             _push("⚠ JPDB frequency dictionary not configured.")
 
         # Anki
         _push("Connecting to Anki...")
+        logging.info(f'Connecting to AnkiConnect: {self._settings.ankiconnect_url}')
         try:
             ok = anki.check_connection(self._settings.ankiconnect_url)
             if ok:
+                logging.info('AnkiConnect: connected')
                 decks = anki.get_deck_names(self._settings.ankiconnect_url)
                 models = anki.get_model_names(self._settings.ankiconnect_url)
 
@@ -242,6 +318,7 @@ class Api:
                     res = anki._request(self._settings.ankiconnect_url, 'getMediaDirPath')
                     if res and os.path.exists(res):
                         self._anki_media_dir = res
+                        logging.info(f'Anki media dir: {res}')
                 except Exception:
                     pass
 
@@ -249,8 +326,14 @@ class Api:
                 # pay the ~3s cold-start cost during the user's scan.
                 if not self._nlp_ready:
                     _push("Initializing tokenizer (SudachiPy)...")
-                    nlp.init()
-                    self._nlp_ready = True
+                    resource_dir = sudachi_setup.get_sudachi_dir() if sudachi_setup.is_dict_installed() else None
+                    logging.info(f'SudachiPy init (eager): resource_dir={resource_dir}')
+                    try:
+                        nlp.init(resource_dir=resource_dir)
+                        self._nlp_ready = True
+                        logging.info('SudachiPy initialized successfully (eager)')
+                    except Exception as e:
+                        logging.error(f'SudachiPy eager init failed: {e}', exc_info=True)
 
                 # Fast: load from cache immediately, refresh in background
                 def _on_refresh(new_words: set):
@@ -319,6 +402,7 @@ class Api:
         try:
             import srt
             input_type = payload.get('input_type', 'media')
+            log.info(f'--- Mining started (type: {input_type}) ---')
 
             # ── STEP 1: Get input & STEP 2: Parse into sentences ─────────────
             media_path = None  # global media if not batch
@@ -848,23 +932,24 @@ class Api:
                     })
 
             t_total_ms = (time.perf_counter() - t_batch_start) * 1000
-            print(f'[perf]    Mining total:                      {t_total_ms:.0f}ms')
+            log.debug(f'[perf]    Mining total:                      {t_total_ms:.0f}ms')
 
+        except NoManualSubtitlesError as e:
+            log.error(f'Mining error: {e}')
+            push({'type': 'error', 'msg': str(e)})
+        except Exception as e:
+            import traceback
+            log.error(f'Mining error: {e}\n{traceback.format_exc()}')
+            push({'type': 'error', 'msg': str(e)})
+        finally:
+            self._running = False
+            log.info(f'--- Mining finished (added: {added}, known: {skipped_known}, freq: {skipped_freq}) ---')
             push({
                 'type': 'done',
                 'added': added,
                 'skipped_known': skipped_known,
-                'skipped_freq': skipped_freq,
+                'skipped_freq': skipped_freq
             })
-
-        except NoManualSubtitlesError as e:
-            push({'type': 'error', 'msg': str(e)})
-        except Exception as e:
-            import traceback
-            push({'type': 'error', 'msg': f'Unexpected error: {e}',
-                  'detail': traceback.format_exc()})
-        finally:
-            self._running = False
 
     # ── Scan & Preview ─────────────────────────────────────────────────────────
 
@@ -874,10 +959,11 @@ class Api:
         and one-line definition. Does NOT add anything to Anki.
         Result is also stored in self._scan_cache for add_single_card.
         """
+        input_type = payload.get('input_type', 'media')
+        log.info(f'--- Batch scan started (type: {input_type}) ---')
+        s = self._settings
         try:
             import srt
-            input_type = payload.get('input_type', 'media')
-            s = self._settings
 
             # Refresh known words from Anki so duplicates are always up-to-date
             try:
@@ -885,6 +971,7 @@ class Api:
                 if fresh_known:
                     self._known_words = fresh_known
             except Exception:
+                log.warning("AnkiConnect unreachable, using cached known words.")
                 pass  # Use cached known_words if Anki unreachable
 
             # ── Step 1: build sentence list ────────────────────────────────
@@ -908,9 +995,9 @@ class Api:
                 total_pairs = len(pairs)
                 offset_ms = int(payload.get('sub_offset_ms', 0))
                 for i, pair in enumerate(pairs):
-                    mp = pair.get('media_path')
-                    sp = pair.get('srt_path')
-                    lbl = pair.get('label', os.path.basename(mp))
+                    mp = pair.get('media_path') or ''
+                    sp = pair.get('srt_path') or ''
+                    lbl = pair.get('label', os.path.basename(mp) if mp else f'Episode {i+1}')
                     self._push({'type': 'status', 'msg': f'Scanning episode {i+1}/{total_pairs} — {lbl}...'})
                     sentences.extend(_parse_srt(sp, offset_ms, mp, lbl))
             else:  # epub / txt
@@ -965,10 +1052,10 @@ class Api:
                     candidates[lemma] = occs
 
             n_sents = len(sentences)
-            print(f'[perf] SudachiPy tokenize      ({n_sents} sents):  {t_tok*1000:.0f}ms')
-            print(f'[perf] Frequency rank lookup                   :  {t_freq*1000:.0f}ms')
-            print(f'[perf] Dictionary batch check  ({len(freq_passing)} terms):  {t_dict:.0f}ms')
-            print(f'[perf] Candidates found                        :  {len(candidates)} words')
+            log.debug(f'[perf] SudachiPy tokenize      ({n_sents} sents):  {t_tok*1000:.0f}ms')
+            log.debug(f'[perf] Frequency rank lookup                   :  {t_freq*1000:.0f}ms')
+            log.debug(f'[perf] Dictionary batch check  ({len(freq_passing)} terms):  {t_dict:.0f}ms')
+            log.debug(f'[perf] Candidates found                        :  {len(candidates)} words')
 
             # ── Step 3: pick best sentence per word ────────────────────────
             def count_unknowns(sentence_text, exclude_lemma):
@@ -1047,15 +1134,15 @@ class Api:
                 })
 
             n_words = len(candidates)
-            print(f'[perf] Best-sentence selection ({n_words} words):  {t_best_sent*1000:.0f}ms  '
+            log.debug(f'[perf] Best-sentence selection ({n_words} words):  {t_best_sent*1000:.0f}ms  '
                   f'(re-tokenizes each candidate sentence)')
-            print(f'[perf] _best_reading (freq+jitendex all reads):  {t_reading*1000:.0f}ms')
-            print(f'[perf] Definition lookup (lookup_for_reading)  :  {t_defn*1000:.0f}ms')
-            print(f'[perf] ExpressionFurigana generation           :  {t_furi_expr*1000:.0f}ms')
-            print(f'[perf] SentenceFurigana tokenize               :  {t_sent_tok*1000:.0f}ms')
-            print(f'[perf] SentenceFurigana apply_jitendex_readings:  {t_sent_furi*1000:.0f}ms')
+            log.debug(f'[perf] _best_reading (freq+jitendex all reads):  {t_reading*1000:.0f}ms')
+            log.debug(f'[perf] Definition lookup (lookup_for_reading)  :  {t_defn*1000:.0f}ms')
+            log.debug(f'[perf] ExpressionFurigana generation           :  {t_furi_expr*1000:.0f}ms')
+            log.debug(f'[perf] SentenceFurigana tokenize               :  {t_sent_tok*1000:.0f}ms')
+            log.debug(f'[perf] SentenceFurigana apply_jitendex_readings:  {t_sent_furi*1000:.0f}ms')
             t_total = time.perf_counter() - t_scan_start
-            print(f'[perf] ── Total scan time                      :  {t_total*1000:.0f}ms')
+            log.debug(f'[perf] ── Total scan time                      :  {t_total*1000:.0f}ms')
 
             # Sort by rank (most common first)
             result_items.sort(key=lambda x: x['rank'] if x['rank'] else 999999)
@@ -1064,7 +1151,10 @@ class Api:
 
         except Exception as e:
             import traceback
+            log.error(f'Scan error: {e}\n{traceback.format_exc()}')
             return {'ok': False, 'error': str(e), 'detail': traceback.format_exc()}
+        finally:
+            log.info(f'--- Batch scan finished (candidates: {len(candidates)}) ---')
 
     def add_single_card(self, lemma: str) -> dict:
         """
@@ -1135,7 +1225,7 @@ class Api:
                                              clip_path, s.clip_padding_ms)
                     fields['SentenceAudio'] = f'[sound:{anki.upload_media(s.ankiconnect_url, clip_path)}]'
                 except Exception as e:
-                    print(f'[api] single card audio error: {e}')
+                    log.error(f'[api] single card audio error: {e}')
 
                 if not audio_only:
                     try:
@@ -1143,7 +1233,7 @@ class Api:
                         media.extract_frame(media_path, occ['start_ms'], occ['end_ms'], frame_path)
                         fields['Picture'] = f"<img src='{anki.upload_media(s.ankiconnect_url, frame_path)}'>"
                     except Exception as e:
-                        print(f'[api] single card frame error: {e}')
+                        log.error(f'[api] single card frame error: {e}')
 
             if s.use_word_audio:
                 try:
@@ -1151,7 +1241,7 @@ class Api:
                     if audio_path:
                         fields['ExpressionAudio'] = f'[sound:{anki.upload_media(s.ankiconnect_url, audio_path)}]'
                 except Exception as e:
-                    print(f'[api] single card word audio error: {e}')
+                    log.error(f'[api] single card word audio error: {e}')
 
             note_id = anki.add_note(s.ankiconnect_url, s.deck_name, s.note_type, fields, s.tags,
                                     allow_duplicate=s.allow_duplicates)
@@ -1162,6 +1252,7 @@ class Api:
             return {'ok': True}
 
         except Exception as e:
+            log.error(f'Error adding single card for {lemma}: {e}\n{traceback.format_exc()}')
             return {'ok': False, 'error': str(e)}
 
     def get_epub_char_count(self, path: str) -> dict:
@@ -1170,6 +1261,7 @@ class Api:
             count = epub.get_total_chars(path)
             return {'ok': True, 'count': count}
         except Exception as e:
+            log.error(f'Error getting EPUB char count for {path}: {e}\n{traceback.format_exc()}')
             return {'ok': False, 'error': str(e)}
 
     # ── File picker ───────────────────────────────────────────────────────────
@@ -1189,7 +1281,7 @@ class Api:
                 return result[0]
             return None
         except Exception as e:
-            print(f"[api] pick_file error: {e}")
+            log.error(f"[api] pick_file error: {e}")
             return None
 
     def pick_folder(self) -> str | None:
@@ -1200,7 +1292,7 @@ class Api:
                 return result[0]
             return None
         except Exception as e:
-            print(f"[api] pick_folder error: {e}")
+            log.error(f"[api] pick_folder error: {e}")
             return None
 
     def scan_folder_for_pairs(self, folder_path: str) -> dict:
@@ -1254,4 +1346,5 @@ class Api:
                 'unpaired_vids': unpaired_vids
             }
         except Exception as e:
+            log.error(f"Error scanning folder for pairs {folder_path}: {e}\n{traceback.format_exc()}")
             return {'ok': False, 'error': str(e)}

@@ -1,17 +1,44 @@
 """
 ffmpeg / ffprobe wrappers for audio clip and frame extraction.
-ffmpeg must be in PATH.
+
+When running as a PyInstaller .exe the ffmpeg/ffprobe executables are
+bundled in the bin/ subdirectory of sys._MEIPASS and are resolved
+automatically.  In dev mode they must be in the system PATH.
 
 Supports both video files and audio-only files (mp3, wav, m4a, ogg, flac, aac, etc.).
 Audio-only files: extract_audio_clip works normally; extract_frame will raise (not applicable).
 """
 
 import os
+import sys
 import subprocess
+
+
+def _get_binary(name: str) -> str:
+    """
+    Return the path to a bundled executable (e.g. 'ffmpeg.exe').
+
+    Search order:
+      1. sys._MEIPASS/bin/<name>  (PyInstaller one-file bundle)
+      2. <exe_dir>/bin/<name>     (next to the .exe, for one-dir bundles)
+      3. <name> as-is             (system PATH fallback)
+    """
+    if getattr(sys, 'frozen', False):
+        # Try the temp extraction dir first (one-file mode)
+        for base in (getattr(sys, '_MEIPASS', ''), os.path.dirname(sys.executable)):
+            candidate = os.path.join(base, 'bin', name)
+            if os.path.isfile(candidate):
+                return candidate
+    return name  # fall back to PATH
 
 
 # Extensions treated as audio-only (no video stream)
 _AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.opus', '.wma'}
+
+# Resolved once at import time (uses bundled bin/ in the exe, PATH in dev mode)
+_FFMPEG  = _get_binary('ffmpeg.exe')
+_FFPROBE = _get_binary('ffprobe.exe')
+
 
 
 def is_audio_only(path: str) -> bool:
@@ -23,7 +50,7 @@ def is_audio_only(path: str) -> bool:
 def get_media_duration_ms(media_path: str) -> int:
     """Use ffprobe to get media duration in milliseconds (works for audio and video)."""
     cmd = [
-        'ffprobe', '-v', 'quiet',
+        _FFPROBE, '-v', 'quiet',
         '-show_entries', 'format=duration',
         '-of', 'csv=p=0',
         media_path
@@ -71,7 +98,7 @@ def extract_audio_clip(
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
     cmd = [
-        'ffmpeg',
+        _FFMPEG,
         '-ss', f'{start_s:.3f}',
         '-to', f'{end_s:.3f}',
         '-i', media_path,
@@ -106,7 +133,7 @@ def extract_frame(
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
     cmd = [
-        'ffmpeg',
+        _FFMPEG,
         '-ss', f'{seek_s:.3f}',
         '-i', video_path,
         '-vframes', '1',
@@ -148,7 +175,7 @@ def extract_media(
     duration_s = (padded_end - padded_start) / 1000.0
 
     cmd = [
-        'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+        _FFMPEG, '-y', '-hide_banner', '-loglevel', 'error',
         '-ss', f'{start_s:.3f}',
         '-i', media_path
     ]

@@ -5,11 +5,29 @@ Dictionaries are stored inside the app's own data/ folder (imported, not linked)
 
 import json
 import os
+import sys
 import shutil
 from dataclasses import dataclass, field, asdict
 
-SETTINGS_FILE = os.path.join(os.path.dirname(__file__), 'settings.json')
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+
+def _app_root() -> str:
+    """
+    Return the directory that contains settings.json and data/.
+
+    - When running from source:        the directory that holds settings.py
+    - When running as a PyInstaller exe: the directory that holds the .exe
+      (sys._MEIPASS is the *temp* extraction directory for bundled files;
+       settings/data live next to the exe, not inside _MEIPASS)
+    """
+    if getattr(sys, 'frozen', False):
+        # Running as a PyInstaller one-file exe
+        return os.path.dirname(sys.executable)
+    # Running from source
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+SETTINGS_FILE = os.path.join(_app_root(), 'settings.json')
+DATA_DIR = os.path.join(_app_root(), 'data')
 
 
 @dataclass
@@ -24,8 +42,8 @@ class Settings:
     jitendex_path: str = ""
     freq_dict_path: str = ""
 
-    # Media
-    temp_dir: str = "./media_temp"
+    # Media — absolute path so it works from any cwd (especially as a .exe)
+    temp_dir: str = field(default_factory=lambda: os.path.join(_app_root(), 'media_temp'))
 
     # Processing
     freq_threshold: int = 10000   # mine words ranked 1–threshold; skip anything > threshold

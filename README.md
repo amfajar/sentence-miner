@@ -25,59 +25,20 @@ A desktop app for **Japanese sentence mining** from anime, YouTube videos, and E
 
 ---
 
-## Requirements
-
-- **Python 3.10+**
-- **[Anki](https://apps.ankiweb.net/)** with **[AnkiConnect](https://ankiweb.net/shared/info/2055492159)** plugin installed and running
-- **ffmpeg** in PATH (for audio clip extraction and screenshots)
-
----
-
 ## Installation
 
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/amfajar/sentence-miner.git
-cd sentence-miner
-```
-
-### 2. Create virtual environment & install dependencies
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-> **Note:** `sudachidict-full` is ~1 GB and will take a few minutes to download on first install.
-
-### 3. Import dictionaries
-
-On first launch, go to the **Settings** tab and import your dictionaries:
-
-| Dictionary | Where to get |
-|---|---|
-| **Jitendex** (definitions) | [jitendex.org](https://jitendex.org) — download the Yomitan `.zip` |
-| **JPDB Frequency** (optional) | [jpdb.io](https://jpdb.io) frequency list in `.zip` format |
-
-Click **Import** next to each entry. The app copies the file into `data/` and builds an optimised SQLite index the first time (one-time process, ~1–2 min for Jitendex).
-
-### 4. Connect Anki
-
-- Open Anki and make sure AnkiConnect is running (default port 8765)
-- The app connects automatically on startup
-- Configure your **deck** and **note type** in the Settings tab
+1. Download `SentenceMiner.exe` from the [Releases](https://github.com/amfajar/sentence-miner/releases) page
+2. Run the exe — on first launch it will automatically download the Japanese dictionary (~70MB or ~800MB depending on your choice)
+3. Open Anki and make sure AnkiConnect is installed and running
+4. In the Settings tab, import your dictionaries (Jitendex + frequency DB)
 
 ---
 
 ## Running
 
-```bash
-python main.py
-```
+Double-click `SentenceMiner.exe`
 
-> On Windows you can also double-click `main.py` if `.py` files are associated with your venv Python.
+> **Developers:** clone the repo and run `python main.py` (requires Python 3.10+, see requirements.txt)
 
 ---
 
@@ -154,7 +115,7 @@ sentence-miner/
 
 ## Anki Note Type Fields
 
-The app expects a note type with these fields:
+The app expects a note type with these fields (note that the note type and deck can be configured in Settings):
 
 | Field | Content |
 |---|---|
@@ -187,8 +148,8 @@ The app expects a note type with these fields:
 **Anki not connecting**
 → Make sure Anki is open and AnkiConnect is installed. Test at `http://localhost:8765`.
 
-**No audio on cards**
-→ ffmpeg must be in your system PATH. Test with `ffmpeg -version` in terminal.
+**SudachiDict download failed**
+→ Check internet connection and restart the app. The download will resume from the setup screen.
 
 **YouTube download fails**
 → yt-dlp needs to be up to date: `pip install -U yt-dlp`

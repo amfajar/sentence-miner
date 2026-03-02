@@ -38,18 +38,30 @@ window.addEventListener('pywebviewready', async () => {
     settings = await window.pywebview.api.get_settings();
     applySettingsToUI(settings);
 
-    // 3. Initialize backend (slow part: dicts, anki connection)
+    // 3. Check if SudachiDict is installed — if not, show first-run setup overlay
+    const sudachiStatus = await window.pywebview.api.check_sudachi();
+    if (!sudachiStatus.installed) {
+        // Show overlay and wait — initialize() will be called by sudachi flow on completion
+        document.getElementById('sudachi-overlay').classList.remove('hidden');
+        return; // Don't call initialize() yet — sudachi setup will do it
+    }
+
+    // 4. Initialize backend (slow part: dicts, anki connection)
+    await doInitialize();
+});
+
+async function doInitialize() {
     const initResult = await window.pywebview.api.initialize();
 
-    // 4. Update settings with full state from backend
+    // Update settings with full state from backend
     if (initResult && initResult.settings) {
         Object.assign(settings, initResult.settings);
         applySettingsToUI(settings);
     }
 
-    // 5. Update UI (anki status, dropdowns)
+    // Update UI (anki status, dropdowns)
     updateAnkiStatus(initResult);
-});
+}
 
 // ── Tab navigation ─────────────────────────────────────────────────────────────
 function setupTabs() {
@@ -518,6 +530,98 @@ function onProgress(data) {
         case 'stopped':
             onProcessingStopped();
             break;
+
+        // ── SudachiDict download progress ──────────────────────────────
+        case 'sudachi_progress':
+            _onSudachiProgress(data.downloaded, data.total, data.pct);
+            break;
+        case 'sudachi_done':
+            _onSudachiDone();
+            break;
+        case 'sudachi_error':
+            _onSudachiError(data.msg);
+            break;
+    }
+}
+
+// ── SudachiDict overlay controls ───────────────────────────────────────────────
+async function startSudachiDownload() {
+    const size = document.querySelector('input[name="sudachi-size"]:checked')?.value || 'small';
+
+    // Switch to progress view
+    document.getElementById('sudachi-step1').classList.add('hidden');
+    document.getElementById('sudachi-step2').classList.remove('hidden');
+
+    // Label
+    const label = document.getElementById('sudachi-progress-label');
+    if (label) label.textContent = `Downloading ${size === 'small' ? '~70 MB' : '~800 MB'}…`;
+
+    await window.pywebview.api.download_sudachi(size);
+}
+
+function cancelSudachiDownload() {
+    window.pywebview.api.cancel_sudachi_download();
+    // Reset to step 1
+    document.getElementById('sudachi-step2').classList.add('hidden');
+    document.getElementById('sudachi-step1').classList.remove('hidden');
+    document.getElementById('sudachi-progress-fill').style.width = '0%';
+    document.getElementById('sudachi-progress-pct').textContent = '0%';
+}
+
+function _onSudachiProgress(downloaded, total, pct) {
+    const fill = document.getElementById('sudachi-progress-fill');
+    const pctEl = document.getElementById('sudachi-progress-pct');
+    const label = document.getElementById('sudachi-progress-label');
+    if (fill) fill.style.width = `${pct}%`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (label && total > 0) {
+        const mbDone = (downloaded / 1048576).toFixed(1);
+        const mbTotal = (total / 1048576).toFixed(1);
+        label.textContent = `Downloading… ${mbDone} MB / ${mbTotal} MB`;
+    }
+}
+
+async function _onSudachiDone() {
+    // Show success step
+    document.getElementById('sudachi-step2').classList.add('hidden');
+    document.getElementById('sudachi-step3').classList.remove('hidden');
+
+    const icon = document.getElementById('sudachi-done-icon');
+    const text = document.getElementById('sudachi-done-text');
+    if (icon) { icon.textContent = '✓'; icon.className = 'sudachi-done-icon'; }
+    if (text) text.textContent = 'Dictionary installed! Loading app…';
+
+    // Small delay so the user can see the success state
+    await new Promise(r => setTimeout(r, 1200));
+
+    // Hide overlay and proceed with normal init
+    document.getElementById('sudachi-overlay').classList.add('hidden');
+    await doInitialize();
+}
+
+function _onSudachiError(msg) {
+    document.getElementById('sudachi-step2').classList.add('hidden');
+    document.getElementById('sudachi-step3').classList.remove('hidden');
+
+    const icon = document.getElementById('sudachi-done-icon');
+    const text = document.getElementById('sudachi-done-text');
+    if (icon) { icon.textContent = '✕'; icon.className = 'sudachi-done-icon error'; }
+    if (text) text.textContent = `Download failed: ${msg}\n\nCheck your internet connection and try again.`;
+
+    // Add a retry button
+    const section = document.getElementById('sudachi-step3');
+    if (section && !section.querySelector('.sudachi-retry-btn')) {
+        const btn = document.createElement('button');
+        btn.className = 'sudachi-btn';
+        btn.textContent = '↺ Try Again';
+        btn.style.marginTop = '16px';
+        btn.onclick = () => {
+            section.classList.add('hidden');
+            section.querySelector('.sudachi-retry-btn')?.remove();
+            document.getElementById('sudachi-step1').classList.remove('hidden');
+        };
+        btn.classList.add('sudachi-retry-btn');
+        section.appendChild(btn);
     }
 }
 

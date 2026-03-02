@@ -5,8 +5,26 @@ Supports cookies.txt for age-restricted / members-only content.
 """
 
 import os
+import sys
 import glob
 import subprocess
+
+
+def _get_binary(name: str) -> str:
+    """
+    Return the path to a bundled executable (e.g. 'yt-dlp.exe').
+    Checks sys._MEIPASS/bin/ first (PyInstaller one-file), then PATH.
+    """
+    if getattr(sys, 'frozen', False):
+        for base in (getattr(sys, '_MEIPASS', ''), os.path.dirname(sys.executable)):
+            candidate = os.path.join(base, 'bin', name)
+            if os.path.isfile(candidate):
+                return candidate
+    return name
+
+
+_YTDLP = _get_binary('yt-dlp.exe')
+
 
 
 class NoManualSubtitlesError(Exception):
@@ -19,7 +37,7 @@ def _build_cmd(url: str, output_template: str, cookies_path: str = None) -> list
     format_selector = 'bv[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv+ba/b'
 
     cmd = [
-        'yt-dlp',
+        _YTDLP,
         '--write-subs',
         '--sub-langs', 'ja.*,ja',        # Match ja, ja-JP, ja-Hira, etc.
         '--convert-subs', 'srt',
@@ -50,9 +68,13 @@ def download(url: str, output_dir: str, cookies_path: str = None) -> tuple[str, 
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Auto-detect cookies.txt in the project root if not specified
+    # Auto-detect cookies.txt next to the exe (frozen) or project root (dev)
     if cookies_path is None:
-        default = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cookies.txt')
+        if getattr(sys, 'frozen', False):
+            _root = os.path.dirname(sys.executable)
+        else:
+            _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        default = os.path.join(_root, 'cookies.txt')
         if os.path.exists(default):
             cookies_path = default
 

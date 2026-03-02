@@ -419,7 +419,62 @@
         </div>
     </section>
 
-    <script src="app.js?v=6"></script>
+    <!-- ══ SUDACHI FIRST-RUN SETUP OVERLAY ═══════════════════════════════════════ -->
+    <div id="sudachi-overlay" class="sudachi-overlay hidden" role="dialog" aria-modal="true"
+        aria-labelledby="sudachi-title">
+        <div class="sudachi-card">
+            <div class="sudachi-icon" aria-hidden="true">掘</div>
+            <h1 class="sudachi-title" id="sudachi-title">First-Time Setup</h1>
+            <p class="sudachi-desc">
+                SentenceMiner needs a Japanese dictionary to analyze text.<br>
+                Choose your preferred size and click <strong>Download</strong>.
+                This only happens once.
+            </p>
+
+            <!-- Size choice (Step 1) -->
+            <div class="sudachi-choices" id="sudachi-step1">
+                <label class="sudachi-radio-row">
+                    <input type="radio" name="sudachi-size" id="sudachi-small" value="small" checked>
+                    <div class="sudachi-radio-content">
+                        <div class="sudachi-radio-title">Small <span
+                                class="sudachi-badge recommended">Recommended</span></div>
+                        <div class="sudachi-radio-hint">~70 MB · Covers the vast majority of everyday Japanese</div>
+                    </div>
+                </label>
+                <label class="sudachi-radio-row">
+                    <input type="radio" name="sudachi-size" id="sudachi-full" value="full">
+                    <div class="sudachi-radio-content">
+                        <div class="sudachi-radio-title">Full</div>
+                        <div class="sudachi-radio-hint">~800 MB · More complete, useful for rare vocabulary</div>
+                    </div>
+                </label>
+                <button class="sudachi-btn" id="sudachi-download-btn" onclick="startSudachiDownload()">
+                    ↓ Download
+                </button>
+            </div>
+
+            <!-- Progress (Step 2) -->
+            <div class="sudachi-progress-section hidden" id="sudachi-step2">
+                <div class="sudachi-progress-label" id="sudachi-progress-label">Downloading…</div>
+                <div class="sudachi-progress-track">
+                    <div class="sudachi-progress-fill" id="sudachi-progress-fill" style="width:0%"></div>
+                </div>
+                <div class="sudachi-progress-pct" id="sudachi-progress-pct">0%</div>
+                <button class="sudachi-btn sudachi-btn-cancel" id="sudachi-cancel-btn"
+                    onclick="cancelSudachiDownload()">
+                    Cancel
+                </button>
+            </div>
+
+            <!-- Done / Error (Step 3) -->
+            <div class="sudachi-done-section hidden" id="sudachi-step3">
+                <div class="sudachi-done-icon" id="sudachi-done-icon">✓</div>
+                <div class="sudachi-done-text" id="sudachi-done-text">Dictionary installed! Loading app…</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=7"></script>
 </body>
 
 </html>

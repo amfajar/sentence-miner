@@ -3,6 +3,8 @@ Japanese tokenization using SudachiPy in Split Mode C.
 Initialize once at startup — takes ~3 seconds. Do NOT reinitialize per sentence.
 """
 
+import json
+import os
 from functools import lru_cache
 from sudachipy import tokenizer, dictionary
 from pipeline.utils import kata_to_hira
@@ -24,14 +26,50 @@ _SKIP_POS = {
 }
 
 
-def init():
-    """Initialize the SudachiPy tokenizer. Call once at startup."""
+import logging
+
+log = logging.getLogger('SentenceMiner.nlp')
+
+def init(resource_dir: str = None):
+    """
+    Initialize the SudachiPy tokenizer. Call once at startup.
+
+    resource_dir: Optional path to the folder containing the SudachiDict .dic
+                  and sudachi.json config (e.g. %APPDATA%\\SentenceMiner\\sudachi).
+                  If None, SudachiPy uses its default package-bundled dict.
+    """
     global _tokenizer_obj
-    if _tokenizer_obj is None:
+    if _tokenizer_obj is not None:
+        return _tokenizer_obj
+
+    if resource_dir and os.path.isdir(resource_dir):
+        # Find the .dic file
+        dic_file = next(
+            (f for f in os.listdir(resource_dir) if f.endswith('.dic')), 
+            None
+        )
+        
+        if dic_file is None:
+            raise FileNotFoundError(f"No .dic file found in sudachi folder: {resource_dir}")
+            
+        dic_path = os.path.join(resource_dir, dic_file)
+
+        try:
+            dic_size_mb = os.path.getsize(dic_path) / 1048576
+            log.info(f'SudachiPy using dict: {dic_path} ({dic_size_mb:.1f}MB)')
+        except Exception:
+            log.info(f'SudachiPy using dict: {dic_path}')
+
+        # By passing the absolute path to the `dict` parameter, SudachiPy natively loads the dict
+        # while safely falling back to the package's bundled sudachi.json and plugins.
+        _tokenizer_obj = dictionary.Dictionary(dict=dic_path).create()
+        log.info('SudachiPy initialized successfully')
+    else:
+        # Default: let SudachiPy find the dict in its installed package
         _tokenizer_obj = dictionary.Dictionary().create()
+        log.info('SudachiPy initialized successfully (default package dict)')
+
     return _tokenizer_obj
-
-
 
 @lru_cache(maxsize=4096)
 def _get_lemma_reading(lemma: str) -> str:
