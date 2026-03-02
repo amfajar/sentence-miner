@@ -535,16 +535,35 @@ class Api:
                 for _ in range(8):
                     pool.submit(_upload_worker)
                 
+            unique_sources = []
+            for _, occ in results:
+                s_name = occ.get('source_name') or (Path(occ.get('media_path', '')).name if occ.get('media_path') else '')
+                if s_name and s_name not in unique_sources:
+                    unique_sources.append(s_name)
+            source_count_total = len(unique_sources) or 1
+
             extract_pool = ThreadPoolExecutor(max_workers=16 if input_type == 'batch' else 8)
             extract_futs = []
+            created_media_files = []
 
             push({'type': 'status', 'msg': f'Building {total} cards...'})
 
             for i, (lemma, occ) in enumerate(results):
                 if not self._running:
+                    for fut in extract_futs:
+                        fut.cancel()
+                    extract_pool.shutdown(wait=True)
+                    if use_direct_write:
+                        for f in created_media_files:
+                            try:
+                                if os.path.exists(f): os.remove(f)
+                            except: pass
                     push({'type': 'stopped'})
                     return
 
+                s_name = occ.get('source_name') or (Path(occ.get('media_path', '')).name if occ.get('media_path') else '')
+                source_idx = (unique_sources.index(s_name) + 1) if s_name in unique_sources else 1
+                
                 push({
                     'type': 'progress',
                     'current_word': lemma,
@@ -554,6 +573,8 @@ class Api:
                     'added': added,
                     'skipped_known': skipped_known,
                     'skipped_freq': skipped_freq,
+                    'source_idx': source_idx,
+                    'source_total': source_count_total,
                 })
 
                 token = occ['token']
@@ -653,11 +674,13 @@ class Api:
                                     if ap:
                                         if direct:
                                             flds['SentenceAudio'] = f"[sound:{anam}]"
+                                            created_media_files.append(ap)
                                         else:
                                             upload_queue.put((ap, flds, 'SentenceAudio', anam))
                                     if fp:
                                         if direct:
                                             flds['Picture'] = f"<img src='{fnam}'>"
+                                            created_media_files.append(fp)
                                         else:
                                             upload_queue.put((fp, flds, 'Picture', fnam))
                                     return ('media', el)
@@ -710,11 +733,30 @@ class Api:
             # Wait for all ffmpeg extractions and HTTP audio fetches to finish
             for fut in extract_futs:
                 try:
+                    while not fut.done():
+                        if not self._running:
+                            break
+                        time.sleep(0.1)
+                    if not self._running:
+                        break
                     resType, elapsed = fut.result()
                     if resType == 'media': _bt_audio_clip += elapsed
                     elif resType == 'word_audio': _bt_word_audio += elapsed
                 except Exception as e:
                     print(f"[api] Background extraction failed: {e}")
+            
+            if not self._running:
+                for fut in extract_futs:
+                    fut.cancel()
+                extract_pool.shutdown(wait=True)
+                if use_direct_write:
+                    for f in created_media_files:
+                        try:
+                            if os.path.exists(f): os.remove(f)
+                        except: pass
+                push({'type': 'stopped'})
+                return
+                
             extract_pool.shutdown()
 
             # Close the upload loop (only if fallback mode)
@@ -764,6 +806,19 @@ class Api:
                 msg = f'Sending chunk {chunk_idx}/{total_chunks} ({len(chunk)} notes) to Anki...'
                 push({'type': 'status', 'msg': msg})
                 print(f'[anki] {msg}')
+                
+                push({
+                    'type': 'progress',
+                    'current_word': 'Anki Sync',
+                    'current_reading': f'Chunk {chunk_idx}/{total_chunks}',
+                    'processed': min(i + len(chunk), len(note_dicts)),
+                    'total': len(note_dicts),
+                    'added': added,
+                    'skipped_known': skipped_known,
+                    'skipped_freq': skipped_freq,
+                    'source_idx': source_count_total,
+                    'source_total': source_count_total,
+                })
                 
                 _t0 = time.perf_counter()
                 ids = anki.add_notes_batch(s.ankiconnect_url, chunk)

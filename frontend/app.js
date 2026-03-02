@@ -497,7 +497,14 @@ function onProgress(data) {
             break;
         case 'progress':
             updateStats(data.added, data.skipped_known, data.skipped_freq);
-            updateProgressBar(data.processed, data.total, data.current_word, data.current_reading);
+            updateProgressBar(
+                data.processed,
+                data.total,
+                data.current_word,
+                data.current_reading,
+                data.source_idx,
+                data.source_total
+            );
             break;
         case 'log':
             addLogEntry(data.badge, data.word, data.reading, data.detail, data.rank);
@@ -520,7 +527,7 @@ function updateStats(added, known, freq) {
     setText('stat-freq', freq ?? 0);
 }
 
-function updateProgressBar(processed, total, word, reading) {
+function updateProgressBar(processed, total, word, reading, sourceIdx, sourceTotal) {
     showElement('active-progress');
     hideElement('idle-state');
     hideElement('done-banner');
@@ -534,7 +541,12 @@ function updateProgressBar(processed, total, word, reading) {
 
     setText('progress-word', word || '—');
     setText('progress-reading', reading || '');
-    setText('progress-count', `${processed.toLocaleString()} / ${total.toLocaleString()}`);
+
+    if (sourceIdx && sourceTotal && sourceTotal > 1) {
+        setText('progress-count', `Ep ${sourceIdx}/${sourceTotal}  ·  ${(processed).toLocaleString()} / ${total.toLocaleString()}`);
+    } else {
+        setText('progress-count', `${(processed).toLocaleString()} / ${total.toLocaleString()}`);
+    }
 }
 
 function onProcessingDone(data) {
