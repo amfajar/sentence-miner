@@ -30,7 +30,7 @@ from pipeline.utils import kata_to_hira as _kata_to_hira
 _DB_PATH = os.path.join(settings_module.DATA_DIR, 'dictionary.db')
 
 
-# ── Style property mapping (camelCase JSON → kebab-case CSS) ──────────────────
+# -- Style property mapping (camelCase JSON -> kebab-case CSS) ------------------
 # Mirrors Yomitan's _setStructuredContentElementStyle.
 _STYLE_PROPS = {
     'fontStyle', 'fontWeight', 'fontSize', 'color', 'background', 'backgroundColor',
@@ -345,6 +345,8 @@ def _index_zip_to_db(zip_path: str, db_path: str):
     cursor.execute('DROP TABLE IF EXISTS meta')
     cursor.execute('CREATE TABLE dictionary (term TEXT, reading TEXT, definition TEXT)')
     cursor.execute('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)')
+    cursor.execute("INSERT INTO meta (key, value) VALUES ('indexing_complete', 'false')")
+    conn.commit()
 
     dict_name = 'Jitendex'
     with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -397,10 +399,14 @@ def _index_zip_to_db(zip_path: str, db_path: str):
     cursor.execute('CREATE INDEX idx_term_reading ON dictionary (term, reading)')
     conn.commit()
 
+    # Mark complete
+    cursor.execute("UPDATE meta SET value='true' WHERE key='indexing_complete'")
+    conn.commit()
+
     # Defragment and verify
     conn.execute('VACUUM')
     conn.close()
-    print(f'[dictionary] Indexed "{dict_name}" → {db_path}')
+    print(f'[dictionary] Indexed "{dict_name}" -> {db_path}')
 
 
 # Increment this when the DB schema or indexing logic changes.
@@ -409,10 +415,18 @@ _DB_SCHEMA_VERSION = 2  # v2: deduplicate by (term, reading) pair
 
 
 def _db_needs_reindex(db_path: str) -> bool:
-    """Return True if DB schema version doesn't match current _DB_SCHEMA_VERSION."""
+    """Return True if DB schema version doesn't match current _DB_SCHEMA_VERSION or if indexing is incomplete."""
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
+
+        cursor.execute("SELECT value FROM meta WHERE key = 'indexing_complete'")
+        row = cursor.fetchone()
+        if not row or row[0] != 'true':
+            conn.close()
+            print('[WARNING] Incomplete dictionary index detected, rebuilding...')
+            return True
+
         cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'")
         row = cursor.fetchone()
         conn.close()
@@ -436,11 +450,16 @@ def load(zip_path: str) -> DictionaryDB:
         not db_missing and
         os.path.getmtime(zip_path) > os.path.getmtime(db_path)
     )
-    schema_outdated = not db_missing and _db_needs_reindex(db_path)
+    schema_outdated_or_corrupt = not db_missing and _db_needs_reindex(db_path)
 
-    if db_missing or zip_newer or schema_outdated:
-        reason = 'schema migration' if schema_outdated else 'first time or zip updated'
-        print(f'[dictionary] Indexing zip → dictionary.db ({reason})…')
+    if db_missing or zip_newer or schema_outdated_or_corrupt:
+        if not db_missing and (schema_outdated_or_corrupt or zip_newer):
+            try:
+                os.remove(db_path)
+            except Exception:
+                pass
+        reason = 'incomplete/schema migration' if schema_outdated_or_corrupt else 'first time or zip updated'
+        print(f'[dictionary] Indexing zip -> dictionary.db ({reason})...')
         _index_zip_to_db(zip_path, db_path)
 
     return DictionaryDB(db_path)

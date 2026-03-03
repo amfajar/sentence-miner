@@ -133,7 +133,7 @@ def get_best_reading(db: FrequencyDB, candidates: list[str]) -> str:
     Example:
       candidates = ['すき', 'ずき']
       すき rank ≈ 100, ずき rank ≈ 14000
-      → returns 'すき'
+      -> returns 'すき'
 
     Falls back to candidates[0] if db is None or none found in freq dict.
     """

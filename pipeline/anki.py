@@ -24,7 +24,7 @@ _CACHE_MAX_AGE_SECS = 60 * 60 * 2  # 2 hours — cache older than this is force-
 _fetch_lock = threading.Lock()
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+# -- Internal helpers ----------------------------------------------------------
 
 def _request(url: str, action: str, **params) -> any:
     """Base AnkiConnect request. Raises on error."""
@@ -44,7 +44,7 @@ def _request(url: str, action: str, **params) -> any:
         raise RuntimeError("AnkiConnect request timed out.")
 
 
-# ── Cache helpers ─────────────────────────────────────────────────────────────
+# -- Cache helpers ------------------------------------------------------------─
 
 def _load_cache() -> tuple[set[str], int, int]:
     """
@@ -119,7 +119,7 @@ def _fetch_expressions_for_type(
         if not note_ids:
             return set(), 0
 
-        print(f'[anki] Fetching {len(note_ids):,} notes for \'{note_type}\' → field \'{field_name}\'')
+        print(f'[anki] Fetching {len(note_ids):,} notes for \'{note_type}\' -> field \'{field_name}\'')
         words = set()
         chunk_size = 1000
         for i in range(0, len(note_ids), chunk_size):
@@ -138,7 +138,7 @@ def _fetch_expressions_for_type(
         return set(), 0, 0
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# -- Public API ----------------------------------------------------------------
 
 def check_connection(url: str) -> bool:
     """Returns True if AnkiConnect responds with a valid version."""
@@ -206,7 +206,7 @@ def get_all_known_expressions(
         total_notes = 0
         global_max_id = 0
 
-        # ── Parallel fetch: one thread per note type ─────────────────────────
+        # -- Parallel fetch: one thread per note type ------------------------─
         per_type_results: dict[str, tuple[set[str], int, int]] = {}
         threads = []
         total_fetched_notes = 0
@@ -224,7 +224,7 @@ def get_all_known_expressions(
         for t in threads:
             t.join()
 
-        # ── Merge results ────────────────────────────────────────────────────
+        # -- Merge results ----------------------------------------------------
         for note_type, (words, mid, count) in per_type_results.items():
             expressions.update(words)
             total_fetched_notes += count
@@ -275,7 +275,7 @@ def get_known_expressions_fast(url: str, targets: list | None = None,
                 return
 
             if delta > 0 and cached_words and cached_max_id > 0:
-                # ── Incremental refresh ──────────────────────────────────────
+                # -- Incremental refresh --------------------------------------
                 # We have a valid cache. Get all IDs per note type, filter to new ones only.
                 print(f'[anki] {delta} new notes detected — incremental refresh.')
                 incremental_ids: dict[str, list[int]] = {}
@@ -298,8 +298,8 @@ def get_known_expressions_fast(url: str, targets: list | None = None,
                     total_count=current_count,
                 )
             else:
-                # ── Full refresh ─────────────────────────────────────────────
-                print(f'[anki] Note count changed ({cached_count:,} → {current_count:,}), full refresh.')
+                # -- Full refresh --------------------------------------------─
+                print(f'[anki] Note count changed ({cached_count:,} -> {current_count:,}), full refresh.')
                 new_words, new_max_id = get_all_known_expressions(url, targets=_targets)
 
             if on_refresh_done and new_words:
@@ -418,7 +418,7 @@ def add_notes_batch(url: str, notes: list[dict]) -> list:
     Returns list[int | None] — None means rejected (duplicate or error).
 
     Replaces N sequential addNote calls, eliminating Anki's ~2s per-note sync
-    overhead: 89 notes → ~2s total instead of ~3 minutes.
+    overhead: 89 notes -> ~2s total instead of ~3 minutes.
     """
     if not notes:
         return []

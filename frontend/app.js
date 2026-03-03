@@ -424,18 +424,32 @@ async function importDictionary(type) {
     const btnId = type === 'jitendex' ? 'jitendex-btn' : 'freq-dict-btn';
     const displayId = type === 'jitendex' ? 'jitendex-display' : 'freq-display-path';
     const btn = document.getElementById(btnId);
-    btn.textContent = 'Importing…';
 
-    const result = await window.pywebview.api.import_dictionary(path, type);
-    if (result.ok) {
-        const name = result.path.split(/[\\\/]/).pop();
-        setFileDisplay(displayId, name);
-        settings[type === 'jitendex' ? 'jitendex_path' : 'freq_dict_path'] = result.path;
+    btn.textContent = 'Indexing... please wait';
+    btn.disabled = true;
+
+    try {
+        const result = await window.pywebview.api.import_dictionary(path, type);
+
         btn.textContent = 'Re-import';
-        addLogEntry('info', null, null, `Imported ${type === 'jitendex' ? 'Jitendex' : 'JPDB freq'}: ${name}`);
-    } else {
-        showError(`Import failed: ${result.error}`);
+        btn.disabled = false;
+
+        if (result.ok) {
+            const name = result.path.split(/[\\\/]/).pop();
+            setFileDisplay(displayId, name);
+            settings[type === 'jitendex' ? 'jitendex_path' : 'freq_dict_path'] = result.path;
+
+            const msg = result.msg || `Imported ${type === 'jitendex' ? 'Jitendex' : 'JPDB freq'}: ${name}`;
+            addLogEntry('info', null, null, msg);
+            // Show alert or let log handle it? A user visible log is good.
+        } else {
+            showError(`Import failed: ${result.error}`);
+            btn.textContent = 'Import';
+        }
+    } catch (e) {
+        btn.disabled = false;
         btn.textContent = 'Import';
+        showError(`Import error: ${e}`);
     }
 }
 

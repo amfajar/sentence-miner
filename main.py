@@ -1,7 +1,12 @@
 import os
 import sys
 
-# ── Logging must be initialised FIRST so all subsequent imports/errors are captured ──
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+# -- Logging must be initialised FIRST so all subsequent imports/errors are captured --
 from logger import setup_logging, log
 setup_logging()
 

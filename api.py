@@ -38,15 +38,15 @@ def _best_reading(jitendex_db, freq_db, lemma: str, sudachi_reading: str) -> str
     Pick the best reading for `lemma` by frequency rank.
 
     Algorithm:
-      1. Collect ALL readings Jitendex has for this lemma (e.g. 本屋 → [ほんや, もとや])
+      1. Collect ALL readings Jitendex has for this lemma (e.g. 本屋 -> [ほんや, もとや])
       2. Add the SudachiPy reading as an extra candidate
       3. Deduplicate while preserving order
       4. Return the candidate with the lowest frequency rank
 
     Examples:
-      本屋: Jitendex [もとや(200K), ほんや(8K)] + SudachiPy ほんや → ほんや ✓
-      好き: Jitendex [すき(100), ずき(14K)] + SudachiPy ずき → すき ✓
-      言う: Jitendex [いう(50)] + SudachiPy ゆう → いう ✓
+      本屋: Jitendex [もとや(200K), ほんや(8K)] + SudachiPy ほんや -> ほんや [OK]
+      好き: Jitendex [すき(100), ずき(14K)] + SudachiPy ずき -> すき [OK]
+      言う: Jitendex [いう(50)] + SudachiPy ゆう -> いう [OK]
     """
     jitendex_readings = dictionary.lookup_all_readings(jitendex_db, lemma)  # all Jitendex readings, hiragana
     candidates = list(dict.fromkeys(filter(None, jitendex_readings + [sudachi_reading])))
@@ -83,7 +83,7 @@ class Api:
         self._nlp_ready = False
         self._anki_media_dir: str | None = None
 
-    # ── Settings ──────────────────────────────────────────────────────────────
+    # -- Settings --------------------------------------------------------------
 
     def get_settings(self) -> dict:
         """Return current settings as a plain dict for the frontend."""
@@ -106,14 +106,27 @@ class Api:
             dest = settings_module.import_dictionary(src_path, dict_type)
             if dict_type == 'jitendex':
                 self._settings.jitendex_path = dest
+                settings_module.save(self._settings)
+                
+                # Reload into memory
+                if hasattr(self, '_dict') and self._dict:
+                    self._dict.close()
+                self._dict = dictionary.load(dest)
+                msg = f"Jitendex loaded: {len(self._dict):,} entries ready"
+                
             else:
                 self._settings.freq_dict_path = dest
-            settings_module.save(self._settings)
-            return {'ok': True, 'path': dest}
+                settings_module.save(self._settings)
+                
+                # Reload into memory
+                self._freq_dict = frequency.load(dest)
+                msg = "Frequency DB loaded successfully"
+                
+            return {'ok': True, 'path': dest, 'msg': msg}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
-    # ── Anki ──────────────────────────────────────────────────────────────────
+    # -- Anki ------------------------------------------------------------------
 
     def test_anki_connection(self) -> dict:
         """Test AnkiConnect connectivity and return known word count."""
@@ -184,7 +197,7 @@ class Api:
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
-    # ── SudachiDict setup ──────────────────────────────────────────────────────
+    # -- SudachiDict setup ------------------------------------------------------
 
     def check_sudachi(self) -> dict:
         """
@@ -231,7 +244,7 @@ class Api:
         """Cancel an in-progress SudachiDict download."""
         sudachi_setup.cancel_download()
 
-    # ── Initialize ────────────────────────────────────────────────────────────
+    # -- Initialize ------------------------------------------------------------
 
     def initialize(self) -> dict:
         """
@@ -280,14 +293,14 @@ class Api:
             _push(f"Loading Jitendex dictionary...")
             try:
                 self._jitendex = dictionary.load(jitendex_path)
-                logging.info(f'Jitendex loaded: {len(self._jitendex):,} entries from {jitendex_path}')
+                logging.info(f'Jitendex: loaded ({len(self._jitendex):,} entries)')
                 _push(f"Jitendex: {len(self._jitendex):,} entries loaded.")
             except Exception as e:
                 logging.error(f'Jitendex load failed: {e}', exc_info=True)
                 errors.append(f"Jitendex load failed: {e}")
         else:
             logging.warning(f'Jitendex not configured (path={jitendex_path!r})')
-            _push("⚠ Jitendex not configured. Go to Settings to import it.")
+            _push("[WARN] Jitendex not configured. Go to Settings to import it.")
 
         # JPDB frequency
         freq_path = self._settings.freq_dict_path
@@ -295,14 +308,14 @@ class Api:
             _push(f"Loading JPDB frequency dictionary...")
             try:
                 self._freq_dict = frequency.load(freq_path)
-                logging.info(f'Freq dict loaded: {len(self._freq_dict):,} entries from {freq_path}')
+                logging.info(f'Frequency DB: loaded ({len(self._freq_dict):,} entries)')
                 _push(f"JPDB freq: {len(self._freq_dict):,} entries loaded.")
             except Exception as e:
                 logging.error(f'Freq dict load failed: {e}', exc_info=True)
                 errors.append(f"JPDB freq load failed: {e}")
         else:
             logging.warning(f'Freq dict not configured (path={freq_path!r})')
-            _push("⚠ JPDB frequency dictionary not configured.")
+            _push("[WARN] JPDB frequency dictionary not configured.")
 
         # Anki
         _push("Connecting to Anki...")
@@ -345,6 +358,7 @@ class Api:
                     targets=self._settings.known_word_targets,
                     on_refresh_done=_on_refresh
                 )
+                logging.info(f'Anki cache: loaded ({len(self._known_words):,} known words)')
                 _push(f"Anki connected \u2014 {len(self._known_words):,} expressions (from cache).")
 
                 result = {
@@ -365,12 +379,12 @@ class Api:
                 return result
             else:
                 msg = "Anki not detected. Please open Anki and ensure AnkiConnect is installed."
-                _push(f"⚠ {msg}")
+                _push(f"[WARN] {msg}")
                 return {'ok': False, 'error': msg, 'decks': [], 'models': [], 'settings': asdict(self._settings)}
         except Exception as e:
             return {'ok': False, 'error': str(e), 'decks': [], 'models': [], 'settings': asdict(self._settings)}
 
-    # ── Mining ────────────────────────────────────────────────────────────────
+    # -- Mining ----------------------------------------------------------------
 
     def start_processing(self, payload: dict) -> None:
         """Start the mining pipeline in a background thread."""
@@ -404,7 +418,7 @@ class Api:
             input_type = payload.get('input_type', 'media')
             log.info(f'--- Mining started (type: {input_type}) ---')
 
-            # ── STEP 1: Get input & STEP 2: Parse into sentences ─────────────
+            # -- STEP 1: Get input & STEP 2: Parse into sentences ------------─
             media_path = None  # global media if not batch
             srt_path = None
             sentences = []
@@ -452,7 +466,7 @@ class Api:
 
             push({'type': 'status', 'msg': f'Parsed {len(sentences):,} sentences.'})
 
-            # ── STEP 3: Tokenize all sentences, collect candidates ─────────
+            # -- STEP 3: Tokenize all sentences, collect candidates --------─
             candidates: dict[str, list] = {}
             total_sents = len(sentences)
             freq_skipped_words: set[str] = set()
@@ -512,7 +526,7 @@ class Api:
                 })
                 return
 
-            # ── STEP 4: Pick best sentence per candidate (i+1 priority) ───
+            # -- STEP 4: Pick best sentence per candidate (i+1 priority) --─
             def count_unknowns(sentence_text: str, exclude_lemma: str) -> int:
                 toks = nlp.tokenize(sentence_text)
                 count = 0
@@ -534,7 +548,7 @@ class Api:
             push({'type': 'status',
                   'msg': f'Selected best sentences. Starting card creation for {len(results):,} words...'})
 
-            # ── STEP 5: Create Anki cards (batch) ─────────────────────────
+            # -- STEP 5: Create Anki cards (batch) ------------------------─
             os.makedirs(s.temp_dir, exist_ok=True)
             added = 0
             skipped_known = 0
@@ -589,7 +603,7 @@ class Api:
             else:
                 print(f"[perf] Anki media dir not found! Falling back to HTTP uploads.")
 
-            # ── Phase 1: Build + Extract ────────────────────────────────────
+            # -- Phase 1: Build + Extract ------------------------------------
             pending: list[tuple[str, str, int, dict]] = []  # (lemma, reading, rank, fields)
             
             # Only used if fallback to HTTP uploads is active
@@ -853,7 +867,7 @@ class Api:
                 _bt_upload = (time.perf_counter() - _t0) * 1000
 
             t_extract_ms = (time.perf_counter() - t_batch_start) * 1000
-            print(f'[perf] ── Extract & Upload phase ({len(pending)} notes) ──')
+            print(f'[perf] -- Extract & Upload phase ({len(pending)} notes) --')
             print(f'[perf]    Media Init (Anki API/dir):         {_bt_media_init:.0f}ms')
             print(f'[perf]    Duplicate check (set):             {_bt_dedup:.0f}ms')
             print(f'[perf]    Dictionary lookups (all):          {_bt_dict_lookup:.0f}ms')
@@ -866,7 +880,7 @@ class Api:
             print(f'[perf]    Word audio HTTP (all):             {_bt_word_audio:.0f}ms')
             print(f'[perf]    Phase total:                       {t_extract_ms:.0f}ms')
 
-            # ── Phase 2: Batch addNotes — Chunked for stability ──────
+            # -- Phase 2: Batch addNotes — Chunked for stability ------
             push({'type': 'status', 'msg': f'Sending {len(pending)} notes to Anki...'})
             note_dicts = [
                 {
@@ -914,7 +928,7 @@ class Api:
                     
             print(f'[perf]    addNotes chunked ({len(note_dicts)} notes):        {_dt_batch_total:.0f}ms')
 
-            # ── Phase 3: Process results and push log events ─────────────────
+            # -- Phase 3: Process results and push log events ----------------─
             for (lemma, jitendex_word_reading, rank, _), note_id in zip(pending, note_ids):
                 if note_id is None:
                     skipped_known += 1
@@ -951,7 +965,7 @@ class Api:
                 'skipped_freq': skipped_freq
             })
 
-    # ── Scan & Preview ─────────────────────────────────────────────────────────
+    # -- Scan & Preview --------------------------------------------------------─
 
     def scan_candidates(self, payload: dict) -> dict:
         """
@@ -974,7 +988,7 @@ class Api:
                 log.warning("AnkiConnect unreachable, using cached known words.")
                 pass  # Use cached known_words if Anki unreachable
 
-            # ── Step 1: build sentence list ────────────────────────────────
+            # -- Step 1: build sentence list --------------------------------
             media_path = None
             srt_path = None
             sentences = []
@@ -1009,7 +1023,7 @@ class Api:
                 lbl = Path(text_path).name
                 sentences = [{'text': t, 'start_ms': None, 'end_ms': None, 'media_path': None, 'source_name': lbl} for t in texts]
 
-            # ── Step 2: collect candidates ─────────────────────────────────
+            # -- Step 2: collect candidates --------------------------------─
             # Phase 2a: tokenize all sentences, collect freq-passing lemmas
             candidates: dict[str, list] = {}
             freq_passing: dict[str, list] = {}  # lemma -> list of (sent, token, rank)
@@ -1057,7 +1071,7 @@ class Api:
             log.debug(f'[perf] Dictionary batch check  ({len(freq_passing)} terms):  {t_dict:.0f}ms')
             log.debug(f'[perf] Candidates found                        :  {len(candidates)} words')
 
-            # ── Step 3: pick best sentence per word ────────────────────────
+            # -- Step 3: pick best sentence per word ------------------------
             def count_unknowns(sentence_text, exclude_lemma):
                 toks = nlp.tokenize(sentence_text)
                 return sum(1 for t in toks
@@ -1142,7 +1156,7 @@ class Api:
             log.debug(f'[perf] SentenceFurigana tokenize               :  {t_sent_tok*1000:.0f}ms')
             log.debug(f'[perf] SentenceFurigana apply_jitendex_readings:  {t_sent_furi*1000:.0f}ms')
             t_total = time.perf_counter() - t_scan_start
-            log.debug(f'[perf] ── Total scan time                      :  {t_total*1000:.0f}ms')
+            log.debug(f'[perf] -- Total scan time                      :  {t_total*1000:.0f}ms')
 
             # Sort by rank (most common first)
             result_items.sort(key=lambda x: x['rank'] if x['rank'] else 999999)
@@ -1264,7 +1278,7 @@ class Api:
             log.error(f'Error getting EPUB char count for {path}: {e}\n{traceback.format_exc()}')
             return {'ok': False, 'error': str(e)}
 
-    # ── File picker ───────────────────────────────────────────────────────────
+    # -- File picker ----------------------------------------------------------─
 
     def pick_file(self, file_types: list[str] = None) -> str | None:
         """Open native file dialog. Returns selected path or None."""

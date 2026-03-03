@@ -22,7 +22,7 @@ import zipfile
 log = logging.getLogger('SentenceMiner.sudachi_setup')
 
 
-# ── Paths ──────────────────────────────────────────────────────────────────────
+# -- Paths ----------------------------------------------------------------------
 
 def get_sudachi_dir() -> str:
     """Return %APPDATA%\\SentenceMiner\\sudachi\\ (created if needed)."""
@@ -80,7 +80,7 @@ def get_installed_size() -> str | None:
     return None
 
 
-# ── Download URLs ───────────────────────────────────────────────────────────────
+# -- Download URLs --------------------------------------------------------------─
 
 _URLS = {
     'small': 'https://github.com/WorksApplications/SudachiDict/releases/download/v20240409/sudachi-dictionary-20240409-small.zip',
@@ -93,7 +93,7 @@ _DIC_NAMES = {
     'full':  'system_full.dic',
 }
 
-# ── sudachipy Package Resource Files ───────────────────────────────────────────
+# -- sudachipy Package Resource Files ------------------------------------------─
 
 def get_sudachipy_resources_dir() -> str | None:
     """
@@ -163,7 +163,7 @@ def copy_sudachipy_resources(dest_dir: str) -> list[str]:
     return copied
 
 
-# ── Download + Extract ──────────────────────────────────────────────────────────
+# -- Download + Extract ----------------------------------------------------------
 
 # Cancellation flag — set to True to abort an in-progress download
 _cancel_flag = threading.Event()
@@ -198,7 +198,7 @@ def download_and_install(
         zip_path = os.path.join(dest_dir, f'_sudachi_{size}.zip')
 
         try:
-            # ── Step 1: Download ────────────────────────────────────────────
+            # -- Step 1: Download --------------------------------------------
             log.info(f'Downloading SudachiDict ({size}) from: {url}')
             req = urllib.request.Request(
                 url,
@@ -223,7 +223,7 @@ def download_and_install(
 
             log.info(f'Download complete: {downloaded / 1048576:.1f} MB')
 
-            # ── Step 2: Extract .dic ────────────────────────────────────────
+            # -- Step 2: Extract .dic ----------------------------------------
             if _cancel_flag.is_set():
                 raise InterruptedError('Download cancelled.')
 
@@ -233,7 +233,7 @@ def download_and_install(
             log.info('Extracting .dic file from zip...')
             _extract_dic(zip_path, dest_dir, dic_dest_name)
 
-            # ── Step 3: Copy sudachipy resource files (char.def, unk.def…) ──
+            # -- Step 3: Copy sudachipy resource files (char.def, unk.def...) --
             log.info('Copying sudachipy resource files (char.def, unk.def, etc.)...')
             copy_sudachipy_resources(dest_dir)
 
@@ -300,7 +300,7 @@ def _extract_dic(zip_path: str, dest_dir: str, dic_dest_name: str):
                 f'First 20 entries: {members[:20]}'
             )
 
-        # Extract .dic → rename to expected name
+        # Extract .dic -> rename to expected name
         dic_member = dic_members[0]
         log.info(f'Extracting {dic_member} -> {dic_dest_name}')
         dic_data = zf.read(dic_member)

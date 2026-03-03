@@ -80,7 +80,7 @@ def download(url: str, output_dir: str, cookies_path: str = None) -> tuple[str, 
 
     output_template = os.path.join(output_dir, '%(title)s.%(ext)s')
 
-    # ── Phase 1: Try WITHOUT cookies first (for public videos) ──────────────
+    # -- Phase 1: Try WITHOUT cookies first (for public videos) --------------
     print("[youtube] Phase 1: Attempting download without cookies...")
     cmd_no_cookie = _build_cmd(url, output_template, cookies_path=None)
     print(f"[youtube] Running: {' '.join(cmd_no_cookie)}")
@@ -89,7 +89,7 @@ def download(url: str, output_dir: str, cookies_path: str = None) -> tuple[str, 
     mp4_files = glob.glob(os.path.join(output_dir, '*.mp4'))
 
     if result.returncode != 0 or not mp4_files:
-        # ── Phase 2: Retry WITH cookies (members-only / age-restricted) ─────
+        # -- Phase 2: Retry WITH cookies (members-only / age-restricted) ----─
         if cookies_path and os.path.exists(cookies_path):
             print(f"[youtube] Phase 1 failed. Retrying with cookies: {cookies_path}")
             cmd_with_cookie = _build_cmd(url, output_template, cookies_path=cookies_path)

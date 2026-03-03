@@ -19,7 +19,7 @@ _SPLIT_RE = re.compile(r'[。！？\n]+')
 _MIN_LENGTH = 5
 
 
-# ── EPUB ──────────────────────────────────────────────────────────────────────
+# -- EPUB ----------------------------------------------------------------------
 
 def extract_text_epub(epub_path: str) -> str:
     """Extract the raw full text from the EPUB (all document items concatenated).
@@ -41,7 +41,7 @@ def extract_text_epub(epub_path: str) -> str:
     return ''.join(parts)
 
 
-# ── TXT ───────────────────────────────────────────────────────────────────────
+# -- TXT ----------------------------------------------------------------------─
 
 def extract_text_txt(txt_path: str) -> str:
     """Read a plain text file as-is."""
@@ -49,7 +49,7 @@ def extract_text_txt(txt_path: str) -> str:
         return f.read()
 
 
-# ── Shared sentence splitter ──────────────────────────────────────────────────
+# -- Shared sentence splitter --------------------------------------------------
 
 def _split_sentences(text_slice: str) -> list[str]:
     sentences = []
@@ -67,7 +67,7 @@ def _split_sentences(text_slice: str) -> list[str]:
     return sentences
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# -- Public API ----------------------------------------------------------------
 
 def extract_sentences(path: str, char_start: int = 0, char_end: int = None) -> list[str]:
     """

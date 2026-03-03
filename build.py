@@ -53,14 +53,14 @@ def main():
     print("  SentenceMiner — PyInstaller Build")
     print("=" * 60)
 
-    # ── Step 1: Prepare bin/ ────────────────────────────────────────
+    # -- Step 1: Prepare bin/ ----------------------------------------
     os.makedirs(BIN_DIR, exist_ok=True)
     print("\n[1/3] Collecting binaries into bin/")
     _copy_binary_to_bin('ffmpeg.exe')
     _copy_binary_to_bin('ffprobe.exe')
     _copy_binary_to_bin('yt-dlp.exe')
 
-    # ── Step 2: Run PyInstaller ─────────────────────────────────────
+    # -- Step 2: Run PyInstaller ------------------------------------─
     print("\n[2/3] Running PyInstaller...")
     cmd = [sys.executable, '-m', 'PyInstaller', '--clean', SPEC_FILE]
     result = subprocess.run(cmd, cwd=ROOT)
@@ -69,7 +69,7 @@ def main():
         print("\n[ERROR] PyInstaller failed. See output above for details.")
         sys.exit(result.returncode)
 
-    # ── Step 3: Done ────────────────────────────────────────────────
+    # -- Step 3: Done ------------------------------------------------
     dist_path = os.path.join(ROOT, 'dist', 'SentenceMiner.exe')
     print("\n[3/3] Build complete!")
     if os.path.exists(dist_path):

@@ -18,10 +18,10 @@ def _is_kana(ch: str) -> bool:
     return '\u3040' <= ch <= '\u30ff'
 
 
-# ── Jitendex reading correction ────────────────────────────────────────────────
+# -- Jitendex reading correction ------------------------------------------------
 
 def _kana_tail_len(text: str) -> int:
-    """Count trailing kana chars in text. e.g. 言う→1, 食べる→2, 走る→1."""
+    """Count trailing kana chars in text. e.g. 言う->1, 食べる->2, 走る->1."""
     count = 0
     for ch in reversed(text):
         if _is_kana(ch):
@@ -39,9 +39,9 @@ def correct_surface_reading(surface: str, lemma: str,
     Correct the SudachiPy surface reading using the Jitendex lemma reading.
 
     Example: 言う surface=言った
-      Jitendex:  いう  → stem い  (tail=1: う)
-      SudachiPy: ゆう  → stem ゆ
-      Surface:   ゆった → replace stem ゆ → いった ✓
+      Jitendex:  いう  -> stem い  (tail=1: う)
+      SudachiPy: ゆう  -> stem ゆ
+      Surface:   ゆった -> replace stem ゆ -> いった [OK]
 
     Falls back to sudachi_surface_reading if correction is not safe.
     """
@@ -108,7 +108,7 @@ def apply_jitendex_readings(tokens: list[dict], lookup_fn, freq_fn=None) -> list
 def _common_kana_suffix(lemma: str, reading: str) -> str:
     """
     Find the longest common kana suffix shared by lemma and reading.
-    e.g. lemma='食べる', reading='たべる' → suffix='べる'
+    e.g. lemma='食べる', reading='たべる' -> suffix='べる'
     """
     suffix_len = 0
     for i in range(1, min(len(lemma), len(reading)) + 1):
@@ -127,8 +127,8 @@ def _align_furigana(lemma: str, reading: str) -> list[tuple[str, str]]:
     Returns a list of (surface_segment, reading_segment) pairs.
     
     Algorithm: walk lemma left-to-right.
-    - Kana in lemma → must match same kana in reading; emit (kana, '').
-    - Kanji run → look ahead for next kana in lemma, find that kana in
+    - Kana in lemma -> must match same kana in reading; emit (kana, '').
+    - Kanji run -> look ahead for next kana in lemma, find that kana in
       the remaining reading to determine where the kanji reading ends.
     """
     segments = []
@@ -179,8 +179,8 @@ def expression_furigana(lemma: str, reading: str) -> str:
     """
     Format furigana for the Expression field using plain Anki format.
     Per-kanji alignment, e.g.:
-      食べる  (たべる)   → 食[た]べる
-      お疲れ様 (おつかれさま) → お 疲[つか]れ 様[さま]
+      食べる  (たべる)   -> 食[た]べる
+      お疲れ様 (おつかれさま) -> お 疲[つか]れ 様[さま]
     If lemma is pure kana, return lemma as-is.
     """
     if not _has_kanji(lemma):

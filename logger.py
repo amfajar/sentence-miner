@@ -27,8 +27,8 @@ def _get_log_path() -> str:
 def setup_logging() -> logging.Logger:
     """
     Configure the root logger with:
-    - RotatingFileHandler → SentenceMiner.log (5 MB × 2 backups)
-    - StreamHandler       → stdout (for console / dev mode)
+    - RotatingFileHandler -> SentenceMiner.log (5 MB × 2 backups)
+    - StreamHandler       -> stdout (for console / dev mode)
 
     Returns the root logger so callers can use it directly.
     Should be called ONCE as the very first thing in main.py.
