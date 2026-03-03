@@ -33,6 +33,10 @@ def setup_logging() -> logging.Logger:
     Returns the root logger so callers can use it directly.
     Should be called ONCE as the very first thing in main.py.
     """
+    root = logging.getLogger()
+    if root.handlers:
+        return logging.getLogger('SentenceMiner')
+
     log_path = _get_log_path()
 
     fmt = logging.Formatter(

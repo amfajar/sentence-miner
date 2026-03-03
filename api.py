@@ -106,23 +106,28 @@ class Api:
             dest = settings_module.import_dictionary(src_path, dict_type)
             if dict_type == 'jitendex':
                 self._settings.jitendex_path = dest
-                settings_module.save(self._settings)
-                
-                # Reload into memory
-                if hasattr(self, '_dict') and self._dict:
-                    self._dict.close()
-                self._dict = dictionary.load(dest)
-                msg = f"Jitendex loaded: {len(self._dict):,} entries ready"
-                
             else:
                 self._settings.freq_dict_path = dest
-                settings_module.save(self._settings)
-                
-                # Reload into memory
-                self._freq_dict = frequency.load(dest)
-                msg = "Frequency DB loaded successfully"
-                
-            return {'ok': True, 'path': dest, 'msg': msg}
+            settings_module.save(self._settings)
+
+            def _load_bg():
+                try:
+                    name = "Jitendex" if dict_type == "jitendex" else "JPDB frequency"
+                    self._push({'type': 'status', 'msg': f'Indexing {name}... this may take 1-2 minutes'})
+                    if dict_type == 'jitendex':
+                        if hasattr(self, '_jitendex') and self._jitendex:
+                            self._jitendex.close()
+                        self._jitendex = dictionary.load(dest)
+                        self._push({'type': 'status', 'msg': f'{name} ready: {len(self._jitendex):,} entries loaded.'})
+                    else:
+                        self._freq_dict = frequency.load(dest)
+                        self._push({'type': 'status', 'msg': f'{name} ready: {len(self._freq_dict):,} entries loaded.'})
+                except Exception as e:
+                    self._push({'type': 'status', 'msg': f'[ERROR] Failed to load {name}: {e}'})
+            
+            threading.Thread(target=_load_bg, daemon=True).start()
+
+            return {'ok': True, 'path': dest}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
@@ -248,8 +253,8 @@ class Api:
 
     def initialize(self) -> dict:
         """
-        Load dictionaries and fetch known words.
-        Pushes status updates via evaluate_js.
+        Start parallel initialization of SudachiPy, Dictionaries, and Anki.
+        Returns immediately. Background threads will push status updates via evaluate_js.
         """
         def _push(msg: str):
             js = f"onProgress({json.dumps({'type': 'status', 'msg': msg}, ensure_ascii=False)})"
@@ -258,131 +263,139 @@ class Api:
             except Exception:
                 pass
 
-        errors = []
+        _push("Init parallel start")
+        t_start = time.perf_counter()
+        logging.info("Init parallel start")
 
-        # SudachiPy init
-        if not self._nlp_ready:
-            _push("Initializing Japanese tokenizer (SudachiPy)...")
-            try:
-                resource_dir = sudachi_setup.get_sudachi_dir() if sudachi_setup.is_dict_installed() else None
-                logging.info(f'SudachiPy init: resource_dir={resource_dir}')
-                
-                if resource_dir and os.path.exists(resource_dir):
-                    logging.info('Sudachi folder contents:')
-                    for fname in os.listdir(resource_dir):
-                        fpath = os.path.join(resource_dir, fname)
-                        if os.path.isfile(fpath):
-                            fsize_kb = os.path.getsize(fpath) / 1024
-                            if fsize_kb > 1024:
-                                logging.info(f'  {fname} ({fsize_kb/1024:.1f} MB)')
-                            else:
-                                logging.info(f'  {fname} ({fsize_kb:.1f} KB)')
-
-                nlp.init(resource_dir=resource_dir)
-
-                self._nlp_ready = True
-                logging.info('SudachiPy initialized successfully')
-                _push("Tokenizer ready.")
-            except Exception as e:
-                logging.error(f'SudachiPy init failed: {e}', exc_info=True)
-                errors.append(f"SudachiPy init failed: {e}")
-
-        # Jitendex
-        jitendex_path = self._settings.jitendex_path
-        if jitendex_path and os.path.exists(jitendex_path):
-            _push(f"Loading Jitendex dictionary...")
-            try:
-                self._jitendex = dictionary.load(jitendex_path)
-                logging.info(f'Jitendex: loaded ({len(self._jitendex):,} entries)')
-                _push(f"Jitendex: {len(self._jitendex):,} entries loaded.")
-            except Exception as e:
-                logging.error(f'Jitendex load failed: {e}', exc_info=True)
-                errors.append(f"Jitendex load failed: {e}")
-        else:
-            logging.warning(f'Jitendex not configured (path={jitendex_path!r})')
-            _push("[WARN] Jitendex not configured. Go to Settings to import it.")
-
-        # JPDB frequency
-        freq_path = self._settings.freq_dict_path
-        if freq_path and os.path.exists(freq_path):
-            _push(f"Loading JPDB frequency dictionary...")
-            try:
-                self._freq_dict = frequency.load(freq_path)
-                logging.info(f'Frequency DB: loaded ({len(self._freq_dict):,} entries)')
-                _push(f"JPDB freq: {len(self._freq_dict):,} entries loaded.")
-            except Exception as e:
-                logging.error(f'Freq dict load failed: {e}', exc_info=True)
-                errors.append(f"JPDB freq load failed: {e}")
-        else:
-            logging.warning(f'Freq dict not configured (path={freq_path!r})')
-            _push("[WARN] JPDB frequency dictionary not configured.")
-
-        # Anki
-        _push("Connecting to Anki...")
-        logging.info(f'Connecting to AnkiConnect: {self._settings.ankiconnect_url}')
-        try:
-            ok = anki.check_connection(self._settings.ankiconnect_url)
-            if ok:
-                logging.info('AnkiConnect: connected')
-                decks = anki.get_deck_names(self._settings.ankiconnect_url)
-                models = anki.get_model_names(self._settings.ankiconnect_url)
-
+        def _init_sudachi():
+            t0 = time.perf_counter()
+            if not self._nlp_ready:
+                _push("Initializing Japanese tokenizer (SudachiPy)...")
                 try:
-                    res = anki._request(self._settings.ankiconnect_url, 'getMediaDirPath')
-                    if res and os.path.exists(res):
-                        self._anki_media_dir = res
-                        logging.info(f'Anki media dir: {res}')
-                except Exception:
-                    pass
-
-                # Init SudachiPy tokenizer eagerly so the first scan doesn't
-                # pay the ~3s cold-start cost during the user's scan.
-                if not self._nlp_ready:
-                    _push("Initializing tokenizer (SudachiPy)...")
                     resource_dir = sudachi_setup.get_sudachi_dir() if sudachi_setup.is_dict_installed() else None
-                    logging.info(f'SudachiPy init (eager): resource_dir={resource_dir}')
-                    try:
-                        nlp.init(resource_dir=resource_dir)
-                        self._nlp_ready = True
-                        logging.info('SudachiPy initialized successfully (eager)')
-                    except Exception as e:
-                        logging.error(f'SudachiPy eager init failed: {e}', exc_info=True)
+                    nlp.init(resource_dir=resource_dir)
+                    self._nlp_ready = True
+                    t = time.perf_counter() - t0
+                    logging.info(f'SudachiPy ready: {t:.1f}s')
+                    _push("Tokenizer ready.")
+                except Exception as e:
+                    logging.error(f'SudachiPy init failed: {e}', exc_info=True)
 
-                # Fast: load from cache immediately, refresh in background
-                def _on_refresh(new_words: set):
-                    self._known_words = new_words
-                    _push(f"Anki cache refreshed \u2014 {len(new_words):,} expressions.")
-
-                self._known_words = anki.get_known_expressions_fast(
-                    self._settings.ankiconnect_url,
-                    targets=self._settings.known_word_targets,
-                    on_refresh_done=_on_refresh
-                )
-                logging.info(f'Anki cache: loaded ({len(self._known_words):,} known words)')
-                _push(f"Anki connected \u2014 {len(self._known_words):,} expressions (from cache).")
-
-                result = {
-                    'ok': True,
-                    'known_count': len(self._known_words),
-                    'decks': decks,
-                    'models': models,
-                    'warnings': errors,
-                    'settings': asdict(self._settings)
-                }
-
-                # Push deck/model info so JS can populate dropdowns immediately
+        def _init_dicts():
+            # Jitendex
+            t0 = time.perf_counter()
+            jitendex_rel = self._settings.jitendex_path
+            jitendex_path = os.path.join(settings_module._app_root(), jitendex_rel) if jitendex_rel else ""
+            if jitendex_path and os.path.exists(jitendex_path):
+                _push("Loading Jitendex dictionary...")
                 try:
-                    js = f"updateAnkiStatus({json.dumps(result, ensure_ascii=False)})"
-                    webview.windows[0].evaluate_js(js)
-                except Exception:
-                    pass
-                return result
+                    self._jitendex = dictionary.load(jitendex_path)
+                    t = time.perf_counter() - t0
+                    logging.info(f'Jitendex ready: {t:.1f}s')
+                    _push(f"Jitendex: {len(self._jitendex):,} entries loaded.")
+                except Exception as e:
+                    logging.error(f'Jitendex init failed: {e}', exc_info=True)
             else:
-                msg = "Anki not detected. Please open Anki and ensure AnkiConnect is installed."
-                _push(f"[WARN] {msg}")
-                return {'ok': False, 'error': msg, 'decks': [], 'models': [], 'settings': asdict(self._settings)}
-        except Exception as e:
-            return {'ok': False, 'error': str(e), 'decks': [], 'models': [], 'settings': asdict(self._settings)}
+                _push("[WARN] Jitendex not configured.")
+
+            # JPDB frequency
+            t0 = time.perf_counter()
+            freq_rel = self._settings.freq_dict_path
+            freq_path = os.path.join(settings_module._app_root(), freq_rel) if freq_rel else ""
+            if freq_path and os.path.exists(freq_path):
+                _push("Loading JPDB frequency dictionary...")
+                try:
+                    self._freq_dict = frequency.load(freq_path)
+                    t = time.perf_counter() - t0
+                    logging.info(f'Frequency DB ready: {t:.1f}s')
+                    _push(f"JPDB freq: {len(self._freq_dict):,} entries loaded.")
+                except Exception as e:
+                    logging.error(f'Freq init failed: {e}', exc_info=True)
+            else:
+                _push("[WARN] JPDB frequency dictionary not configured.")
+
+        def _init_anki():
+            while True:
+                t0 = time.perf_counter()
+                try:
+                    ok = anki.check_connection(self._settings.ankiconnect_url)
+                    if ok:
+                        decks = anki.get_deck_names(self._settings.ankiconnect_url)
+                        models = anki.get_model_names(self._settings.ankiconnect_url)
+
+                        try:
+                            res = anki._request(self._settings.ankiconnect_url, 'getMediaDirPath')
+                            if res and os.path.exists(res):
+                                self._anki_media_dir = res
+                                logging.info(f'Anki media dir: {res}')
+                        except Exception:
+                            pass
+
+                        # Fast: load from cache immediately, refresh in background
+                        def _on_refresh(new_words: set):
+                            self._known_words = new_words
+                            _push(f"Anki cache refreshed: {len(new_words):,} expressions.")
+
+                        try:
+                            self._known_words = anki.get_known_expressions_fast(
+                                self._settings.ankiconnect_url,
+                                targets=self._settings.known_word_targets,
+                                on_refresh_done=_on_refresh
+                            )
+                        except Exception:
+                            self._known_words = set()
+
+                        t = time.perf_counter() - t0
+                        logging.info(f'AnkiConnect ready: {t:.1f}s')
+
+                        result = {
+                            'ok': True,
+                            'known_count': len(self._known_words),
+                            'decks': decks,
+                            'models': models,
+                            'warnings': [],
+                            'settings': asdict(self._settings)
+                        }
+
+                        _push(f"Anki connected: {len(self._known_words):,} expressions.")
+                        
+                        try:
+                            js = f"updateAnkiStatus({json.dumps(result, ensure_ascii=False)})"
+                            webview.windows[0].evaluate_js(js)
+                        except Exception:
+                            pass
+                        
+                        break  # Stop retrying once connected
+                    else:
+                        _push("Waiting for Anki (retrying in 5s)...")
+                except Exception as e:
+                    _push(f"Waiting for Anki: {e} (retrying)...")
+                
+                time.sleep(5)
+
+        def _run_all_parallel():
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                f1 = executor.submit(_init_sudachi)
+                f2 = executor.submit(_init_dicts)
+                f3 = executor.submit(_init_anki)
+                
+                f1.result()
+                f2.result()
+                # Do not wait for f3, it will loop until Anki connects if necessary
+                t_total = time.perf_counter() - t_start
+                logging.info(f'All components ready: {t_total:.1f}s (was sequential: ~7s)')
+                _push("All linguistic components ready.")
+
+        threading.Thread(target=_run_all_parallel, daemon=True).start()
+
+        return {
+            'ok': False,
+            'known_count': 0,
+            'decks': [],
+            'models': [],
+            'warnings': [],
+            'settings': asdict(self._settings)
+        }
 
     # -- Mining ----------------------------------------------------------------
 

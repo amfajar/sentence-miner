@@ -1,9 +1,16 @@
 import os
 import sys
+import io
 
+<<<<<<< HEAD
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
+=======
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+>>>>>>> 40d656f (Fix bugs: Unicode, Dict Reload, Anki Parallel Init, Duplicate Logs)
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # -- Logging must be initialised FIRST so all subsequent imports/errors are captured --
@@ -67,6 +74,8 @@ def main():
 
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
     try:
         main()
     except Exception:

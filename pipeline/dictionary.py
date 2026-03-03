@@ -345,8 +345,6 @@ def _index_zip_to_db(zip_path: str, db_path: str):
     cursor.execute('DROP TABLE IF EXISTS meta')
     cursor.execute('CREATE TABLE dictionary (term TEXT, reading TEXT, definition TEXT)')
     cursor.execute('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)')
-    cursor.execute("INSERT INTO meta (key, value) VALUES ('indexing_complete', 'false')")
-    conn.commit()
 
     dict_name = 'Jitendex'
     with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -399,10 +397,6 @@ def _index_zip_to_db(zip_path: str, db_path: str):
     cursor.execute('CREATE INDEX idx_term_reading ON dictionary (term, reading)')
     conn.commit()
 
-    # Mark complete
-    cursor.execute("UPDATE meta SET value='true' WHERE key='indexing_complete'")
-    conn.commit()
-
     # Defragment and verify
     conn.execute('VACUUM')
     conn.close()
@@ -415,18 +409,10 @@ _DB_SCHEMA_VERSION = 2  # v2: deduplicate by (term, reading) pair
 
 
 def _db_needs_reindex(db_path: str) -> bool:
-    """Return True if DB schema version doesn't match current _DB_SCHEMA_VERSION or if indexing is incomplete."""
+    """Return True if DB schema version doesn't match current _DB_SCHEMA_VERSION."""
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-
-        cursor.execute("SELECT value FROM meta WHERE key = 'indexing_complete'")
-        row = cursor.fetchone()
-        if not row or row[0] != 'true':
-            conn.close()
-            print('[WARNING] Incomplete dictionary index detected, rebuilding...')
-            return True
-
         cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'")
         row = cursor.fetchone()
         conn.close()
