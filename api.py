@@ -284,8 +284,7 @@ class Api:
         def _init_dicts():
             # Jitendex
             t0 = time.perf_counter()
-            jitendex_rel = self._settings.jitendex_path
-            jitendex_path = os.path.join(settings_module._app_root(), jitendex_rel) if jitendex_rel else ""
+            jitendex_path = self._settings.jitendex_path
             if jitendex_path and os.path.exists(jitendex_path):
                 _push("Loading Jitendex dictionary...")
                 try:
@@ -300,8 +299,7 @@ class Api:
 
             # JPDB frequency
             t0 = time.perf_counter()
-            freq_rel = self._settings.freq_dict_path
-            freq_path = os.path.join(settings_module._app_root(), freq_rel) if freq_rel else ""
+            freq_path = self._settings.freq_dict_path
             if freq_path and os.path.exists(freq_path):
                 _push("Loading JPDB frequency dictionary...")
                 try:

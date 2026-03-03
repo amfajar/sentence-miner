@@ -436,15 +436,10 @@ def load(zip_path: str) -> DictionaryDB:
         not db_missing and
         os.path.getmtime(zip_path) > os.path.getmtime(db_path)
     )
-    schema_outdated_or_corrupt = not db_missing and _db_needs_reindex(db_path)
+    schema_outdated = not db_missing and _db_needs_reindex(db_path)
 
-    if db_missing or zip_newer or schema_outdated_or_corrupt:
-        if not db_missing and (schema_outdated_or_corrupt or zip_newer):
-            try:
-                os.remove(db_path)
-            except Exception:
-                pass
-        reason = 'incomplete/schema migration' if schema_outdated_or_corrupt else 'first time or zip updated'
+    if db_missing or zip_newer or schema_outdated:
+        reason = 'schema migration' if schema_outdated else 'first time or zip updated'
         print(f'[dictionary] Indexing zip -> dictionary.db ({reason})...')
         _index_zip_to_db(zip_path, db_path)
 
