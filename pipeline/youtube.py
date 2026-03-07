@@ -9,6 +9,8 @@ import sys
 import glob
 import subprocess
 
+_CREATIONFLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0
+
 
 def _get_binary(name: str) -> str:
     """
@@ -85,7 +87,7 @@ def download(url: str, output_dir: str, cookies_path: str = None) -> tuple[str, 
     cmd_no_cookie = _build_cmd(url, output_template, cookies_path=None)
     print(f"[youtube] Running: {' '.join(cmd_no_cookie)}")
 
-    result = subprocess.run(cmd_no_cookie, timeout=600)
+    result = subprocess.run(cmd_no_cookie, timeout=600, creationflags=_CREATIONFLAGS)
     mp4_files = glob.glob(os.path.join(output_dir, '*.mp4'))
 
     if result.returncode != 0 or not mp4_files:
@@ -94,7 +96,7 @@ def download(url: str, output_dir: str, cookies_path: str = None) -> tuple[str, 
             print(f"[youtube] Phase 1 failed. Retrying with cookies: {cookies_path}")
             cmd_with_cookie = _build_cmd(url, output_template, cookies_path=cookies_path)
             print(f"[youtube] Running: {' '.join(cmd_with_cookie)}")
-            result2 = subprocess.run(cmd_with_cookie, timeout=600)
+            result2 = subprocess.run(cmd_with_cookie, timeout=600, creationflags=_CREATIONFLAGS)
             if result2.returncode != 0:
                 raise RuntimeError(
                     "yt-dlp failed even with cookies.\n"

@@ -38,6 +38,9 @@ class Settings:
     deck_name: str = "Mining"
     tags: list = field(default_factory=lambda: ["sentence-miner"])
 
+    # Yomitan API
+    yomitan_api_url: str = "http://127.0.0.1:19633"
+
     # Dictionary paths — stored inside data/ after import
     jitendex_path: str = ""
     freq_dict_path: str = ""

@@ -1,0 +1,24 @@
+{
+  "profile": "User 1",
+  "totalNotes": 6,
+  "chunkCount": 10,
+  "chunks": [
+    {
+      "file": "_kiku_notes_2.json.gz",
+      "count": 5,
+      "range": [
+        1762867543082,
+        1771130706652
+      ]
+    },
+    {
+      "file": "_kiku_notes_6.json.gz",
+      "count": 1,
+      "range": [
+        1771130401006,
+        1771130401006
+      ]
+    }
+  ],
+  "generatedAt": 1771160185698.962
+}

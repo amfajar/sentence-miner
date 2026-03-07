@@ -1,0 +1,115 @@
+/* Kiku Note v1.7.0
+* This file is auto-generated. Any manual changes will be lost on save.
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*
+*/
+
+@layer theme, base, components, utilities.daisyui.component, custom;
+
+/* __CSS_VARIABLE__ */
+
+@layer custom {
+  [data-theme] {
+    /* custom theme here */
+  }
+}
+
+/* apply initial background-color before the card render */
+.card {
+  background-color: var(--color-base-100) !important;
+}

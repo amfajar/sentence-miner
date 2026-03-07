@@ -10,7 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=6">
+    <link rel="stylesheet" href="style.css?v=7">
 </head>
 
 <body>
@@ -23,6 +23,7 @@
         </div>
         <nav class="nav-tabs" role="navigation" aria-label="Main navigation">
             <button class="nav-tab active" data-tab="mine" id="tab-btn-mine">Mine</button>
+            <button class="nav-tab" data-tab="backfill" id="tab-btn-backfill">Backfill</button>
             <button class="nav-tab" data-tab="settings" id="tab-btn-settings">Settings</button>
         </nav>
         <div class="anki-status" id="anki-status" aria-live="polite">
@@ -327,6 +328,167 @@
 
     </main>
 
+    <!-- ══ BACKFILL TAB ═══════════════════════════════════════════════════════════ -->
+    <section class="tab-content" id="tab-backfill" aria-label="Backfill">
+        <div class="bf-tab-inner">
+
+            <!-- Yomitan warning banner (shown only when Yomitan unreachable) -->
+            <div class="bf-yomitan-banner hidden" id="bf-yomitan-banner" role="alert">
+                <span class="bf-yomitan-icon" aria-hidden="true">⚠</span>
+                <span id="bf-yomitan-banner-msg">Yomitan API not detected. In Yomitan Settings → General, enable
+                    <b>Yomitan API</b>, then click Retry.</span>
+                <button class="bf-yomitan-retry-btn" onclick="checkYomitan()" title="Re-check Yomitan API">↻
+                    Retry</button>
+            </div>
+
+            <!-- ── RUN MODE ─────────────────────────────────────────────────── -->
+            <div id="bf-run-mode">
+
+                <!-- Header row -->
+                <div class="bf-section-header">
+                    <div class="bf-section-title">BACKFILL</div>
+                </div>
+
+                <!-- SECTION 1: Deck Selection -->
+                <div class="bf-section">
+                    <div class="bf-label">SELECT DECKS</div>
+                    <div class="bf-deck-list-wrap">
+                        <div class="bf-deck-list" id="bf-deck-list">
+                            <div class="bf-deck-placeholder" id="bf-deck-placeholder">Connect Anki to load decks…</div>
+                        </div>
+                    </div>
+                    <div class="bf-deck-load-row">
+                        <button class="bf-secondary-btn" id="bf-refresh-decks-btn" onclick="refreshBackfillDecks()">↻
+                            Refresh Decks</button>
+                        <span class="bf-yomitan-status" id="bf-yomitan-status" title="Yomitan API status"></span>
+                        <button class="bf-secondary-btn" id="bf-configure-btn" onclick="showBackfillConfigureMode()">⚙
+                            Configure Fields</button>
+                    </div>
+                    <!-- Validation status -->
+                    <div class="bf-validation-row hidden" id="bf-validation-row">
+                        <span class="bf-validation-icon" id="bf-validation-icon">✓</span>
+                        <span class="bf-validation-msg" id="bf-validation-msg"></span>
+                    </div>
+                </div>
+
+                <!-- SECTION 2: Mapping Preview -->
+                <div class="bf-section" id="bf-mapping-preview-section">
+                    <div class="bf-label-row">
+                        <div class="bf-label">FIELD MAPPING</div>
+                        <button class="bf-edit-btn" onclick="showBackfillConfigureMode()">Edit Mapping</button>
+                    </div>
+                    <div class="bf-mapping-preview" id="bf-mapping-preview">
+                        <div class="bf-preview-empty" id="bf-preview-empty">No mapping saved yet. Click "Configure
+                            Fields" to set up.</div>
+                        <div class="bf-preview-list" id="bf-preview-list"></div>
+                    </div>
+                </div>
+
+                <!-- SECTION 3: Run Controls -->
+                <div class="bf-section bf-run-controls-section">
+                    <!-- Start button -->
+                    <button class="bf-start-btn" id="bf-start-btn" onclick="startBackfill()" disabled>
+                        <span class="bf-btn-icon">▶</span>
+                        <span>Start Backfill</span>
+                    </button>
+
+                    <!-- Progress area (hidden until running) -->
+                    <div class="bf-progress-area hidden" id="bf-progress-area">
+                        <div class="bf-progress-status" id="bf-progress-status">Processing…</div>
+                        <div class="bf-progress-track">
+                            <div class="bf-progress-fill" id="bf-progress-fill" style="width:0%"></div>
+                        </div>
+                        <div class="bf-progress-labels">
+                            <span id="bf-progress-count">0 / 0</span>
+                            <span id="bf-progress-pct">0%</span>
+                        </div>
+                        <!-- Pause / Cancel buttons -->
+                        <div class="bf-action-row" id="bf-action-row">
+                            <button class="bf-pause-btn" id="bf-pause-btn" onclick="toggleBackfillPause()">
+                                <span id="bf-pause-icon">⏸</span> <span id="bf-pause-text">Pause</span>
+                            </button>
+                            <button class="bf-cancel-btn" id="bf-cancel-btn" onclick="cancelBackfill()">✕
+                                Cancel</button>
+                        </div>
+                    </div>
+
+                    <!-- Summary card (shown on completion) -->
+                    <div class="bf-summary-card hidden" id="bf-summary-card">
+                        <div class="bf-summary-icon" id="bf-summary-icon">✓</div>
+                        <div class="bf-summary-title" id="bf-summary-title">Backfill complete</div>
+                        <div class="bf-summary-body" id="bf-summary-body"></div>
+                        <button class="bf-secondary-btn" style="margin-top:12px" onclick="resetBackfillUI()">↩ Run
+                            Again</button>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ── CONFIGURE MODE ────────────────────────────────────────────── -->
+            <div id="bf-configure-mode" class="hidden">
+
+                <div class="bf-section-header">
+                    <div class="bf-section-title">CONFIGURE FIELD MAPPING</div>
+                </div>
+
+                <div class="bf-section">
+                    <div class="bf-label">NOTE TYPE: <span id="bf-configure-note-type"
+                            style="color:var(--accent);font-weight:600"></span></div>
+                    <div class="bf-hint">Map each Anki field to a Yomitan handlebar. Fields set to "none" are left
+                        untouched.</div>
+                </div>
+
+                <!-- Expression Field and Reading Field selectors -->
+                <div class="bf-section bf-source-fields-section">
+                    <!-- Expression Field -->
+                    <div class="bf-source-row">
+                        <label class="bf-source-label" for="bf-expression-field-sel">
+                            Expression Field
+                            <span class="bf-source-hint">Field containing the Japanese word to look up in Yomitan
+                                (read-only — never overwritten)</span>
+                        </label>
+                        <select class="bf-hb-select bf-source-select" id="bf-expression-field-sel">
+                            <!-- options injected by JS -->
+                        </select>
+                    </div>
+                    <!-- Reading Field -->
+                    <div class="bf-source-row">
+                        <label class="bf-source-label" for="bf-reading-field-sel">
+                            Reading Field
+                            <span class="bf-source-hint">Optional — kana reading for more accurate lookup</span>
+                        </label>
+                        <select class="bf-hb-select bf-source-select" id="bf-reading-field-sel">
+                            <!-- options injected by JS -->
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Field mapping table -->
+                <div class="bf-table-wrap">
+                    <table class="bf-mapping-table" id="bf-mapping-table">
+                        <thead>
+                            <tr>
+                                <th class="bf-th">Field (Anki)</th>
+                                <th class="bf-th">Handlebar (Yomitan)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bf-mapping-tbody">
+                            <!-- rows injected by JS -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Configure actions -->
+                <div class="bf-configure-actions">
+                    <button class="bf-start-btn" onclick="saveBackfillMapping()">💾 Save Mapping</button>
+                    <button class="bf-secondary-btn" onclick="cancelBackfillConfigure()">Cancel</button>
+                </div>
+
+            </div>
+
+        </div>
+    </section>
+
     <!-- ══ SETTINGS TAB ══════════════════════════════════════════════════════════ -->
     <section class="tab-content" id="tab-settings" aria-label="Settings">
         <div class="settings-scroll">
@@ -344,6 +506,18 @@
                             <button class="test-btn" id="test-anki-btn" onclick="testAnki()">Test</button>
                         </div>
                         <div class="test-result hidden" id="test-result"></div>
+                    </div>
+
+                    <div class="settings-row">
+                        <label class="settings-label" for="s-yomitan-url">Yomitan API URL</label>
+                        <div class="settings-field-row">
+                            <input type="text" id="s-yomitan-url" class="text-input" value="http://127.0.0.1:19633"
+                                autocomplete="off" spellcheck="false">
+                            <button class="test-btn" id="test-yomitan-btn" onclick="testYomitan()">Test</button>
+                        </div>
+                        <div class="hint-text">Enable "Yomitan API" in Yomitan Settings → General. Default port is
+                            19633.</div>
+                        <div class="test-result hidden" id="test-yomitan-result"></div>
                     </div>
 
                     <div class="settings-row">

@@ -1,0 +1,169 @@
+<!-- Kiku Note v1.7.0
+This file is auto-generated. Any manual changes will be lost on save.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-->
+
+<!-- biome-ignore format: this looks nicer-->
+<div
+id="kiku-root"
+data-side="front"
+data-theme="__DATA_THEME__"
+data-blur-nsfw="__DATA_BLUR_NSFW__"
+data-picture-on-front="__DATA_PICTURE_ON_FRONT__"
+data-mod-vertical="__DATA_MOD_VERTICAL__"
+>
+<!-- Do not modify anything if you don't know what you're doing Σ(°ロ°) -->
+<div data-hk="000000010000000000" class="font-primary transition-colors relative"><div class="flex flex-col gap-6 p-2 sm:p-4 bg-base-100 min-h-full mx-auto pt-10 sm:pt-14 layout-max-width"><!--!$--><div data-hk="0000000100000000010" class="flex flex-col gap-4"><div class="flex rounded-lg gap-4 flex-col sm:flex-row"><div class="flex-1 bg-base-200 p-4 rounded-lg flex flex-col items-center justify-center min-h-40 sm:min-h-56"><div class="expression font-secondary text-center vertical-rl  ">{{#IsSentenceCard}} <span>?</span> {{/IsSentenceCard}} {{#IsAudioCard}} <span>?</span> {{/IsAudioCard}} {{^IsSentenceCard}} {{^IsAudioCard}} {{Expression}} {{/IsAudioCard}} {{/IsSentenceCard}}</div></div><!--$--><div data-hk="00000001000000000110" class="sm:max-w-1/2 bg-base-200 flex sm:items-center rounded-lg relative overflow-hidden justify-center picture-field-container " data-has-picture="{{#Picture}}true{{/Picture}}"><div class="picture-field-background" style="">{{Picture}}</div><div class="picture-field " style="" data-tags="{{Tags}}" data-nsfw="false" >{{Picture}}</div></div><!--/--></div><!--$--><!--/--></div><div data-hk="0000000100000000012" class="flex flex-col gap-4 items-center text-center justify-center "></div><div data-hk="0000000100000000013" class="flex gap-2 items-center justify-center text-center border-t-1 hint text-base-content-calm hint-field border-base-content-soft p-2 " data-has-hint="{{#Hint}}true{{/Hint}}"><div>{{Hint}}</div></div></div><!--$--><!--/--></div>
+</div>
+
+<!-- biome-ignore format: $-->
+<div>
+<link ref="preload" href="_kiku_font_hina-mincho.woff2" as="font" type="font/woff2" >
+<link ref="preload" href="_kiku_font_klee-one.woff2" as="font" type="font/woff2" >
+<link ref="preload" href="_kiku_font_ibm-plex-sans-jp.woff2" as="font" type="font/woff2" >
+<link rel="stylesheet" href="_kiku.css" id="kiku-css">
+<link rel="stylesheet" href="_kiku_plugin.css" id="kiku-css-plugin">
+<link href="_kiku.js" data-anki-include>
+<link href="_kiku_libs.js" data-anki-include>
+<link href="_kiku_shared.js" data-anki-include>
+<link href="_kiku_lazy.js" data-anki-include>
+<link href="_kiku_worker.js" data-anki-include>
+<link href="_kiku_plugin.js" data-anki-include>
+<link href="_kiku_db_main.tar" data-anki-include>
+<link href="_kiku_db_main_manifest.json" data-anki-include>
+<link href="_kiku_back.html" data-anki-include>
+<link href="_kiku_front.html" data-anki-include>
+<link href="_kiku_style.css" data-anki-include>
+</div>
+
+<!-- biome-ignore format: this looks nicer -->
+<div style="display: none" id="anki-fields">
+<div data-field="Expression">{{Expression}}</div>
+<div data-field="Hint">{{Hint}}</div>
+<div data-field="Picture">{{Picture}}</div>
+<div data-field="IsWordAndSentenceCard">{{IsWordAndSentenceCard}}</div>
+<div data-field="IsClickCard">{{IsClickCard}}</div>
+<div data-field="IsSentenceCard">{{IsSentenceCard}}</div>
+<div data-field="IsAudioCard">{{IsAudioCard}}</div>
+{{#IsAudioCard}}
+<div data-field="ExpressionAudio">{{ExpressionAudio}}</div>
+<div data-field="SentenceAudio">{{SentenceAudio}}</div>
+{{/IsAudioCard}}
+{{^IsAudioCard}}
+<div data-field="ExpressionAudio"></div>
+<div data-field="SentenceAudio"></div>
+{{/IsAudioCard}}
+<div data-field="Sentence">{{Sentence}}</div>
+<div data-field="MiscInfo">{{MiscInfo}}</div>
+<div data-field="Tags">{{Tags}}</div>
+<div data-field="CardID">{{CardID}}</div>
+<div data-field="kanji:Sentence"> {{kanji:Sentence}} </div>
+<div data-field="furigana:Sentence"> {{furigana:Sentence}} </div>
+<div data-field="SentenceFurigana"> {{SentenceFurigana}} </div>
+<div data-field="furigana:SentenceFurigana"> {{furigana:SentenceFurigana}} </div>
+<div data-field="kana:SentenceFurigana"> {{kana:SentenceFurigana}} </div>
+</div>
+
+<script>window._$HY||(e=>{let t=e=>e&&e.hasAttribute&&(e.hasAttribute("data-hk")?e:t(e.host&&e.host.nodeType?e.host:e.parentNode));["click", "input"].forEach((o=>document.addEventListener(o,(o=>{if(!e.events)return;let s=t(o.composedPath&&o.composedPath()[0]||o.target);s&&!e.completed.has(s)&&e.events.push([s,o])}))))})(_$HY={events:[],completed:new WeakSet,r:{},fe(){}});</script><!--xs-->
+
+<script type="module">
+import { init } from "./_kiku.js";
+
+init({ side: "front", ssr: true });
+</script>

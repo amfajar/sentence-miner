@@ -1,0 +1,119 @@
+/* Don't let this file be empty or Anki will not sync it */
+
+
+/* ── Yomitan Glossary Dictionary Styles ── */
+/* ── Base ── */
+.yomitan-glossary { font-family: sans-serif; font-size: 14px; line-height: 1.6; color: #222; }
+
+/* ── Dictionary block ── */
+.yomitan-glossary li[data-dictionary] {
+  border-left: 3px solid #d0d0d0;
+  padding: 6px 10px 6px 12px;
+  margin-bottom: 10px;
+  background: #fafafa;
+  border-radius: 0 6px 6px 0;
+  list-style-type: none;
+}
+
+/* ── Dict label (dimmed and small) ── */
+.yomitan-glossary li[data-dictionary] > i {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 4px;
+  font-style: normal;
+}
+
+/* ── Definitions with consistent spacing ── */
+.yomitan-glossary ul, .yomitan-glossary ol { margin: 0; padding-left: 20px; }
+.yomitan-glossary li { margin-bottom: 4px; }
+
+/* ── Plain text entries (e.g. NHK, 新和英) clean line spacing ── */
+.yomitan-glossary li[data-dictionary="新和英"], 
+.yomitan-glossary li[data-dictionary="NHK日本語発音アクセント新辞典"] { line-height: 1.8; }
+
+/* ── data-sc-num numbers styled as markers ── */
+.yomitan-glossary [data-sc-num] {
+  font-size: 12px;
+  font-weight: 700;
+  color: #aaa;
+  margin-right: 6px;
+  display: inline-block;
+  min-width: 18px;
+}
+
+/* ── data-sc-ex example sentences indented and dimmed ── */
+.yomitan-glossary [data-sc-ex], .yomitan-glossary [data-sc-ex-g] {
+  display: block;
+  margin-top: 2px;
+  margin-bottom: 6px;
+  margin-left: 12px;
+  color: #666;
+  font-size: 0.95em;
+  border-left: 2px solid #ccc;
+  padding-left: 8px;
+}
+
+/* ── 類語例解辞典 tables readable with borders ── */
+.yomitan-glossary li[data-dictionary="類語例解辞典"] table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 6px;
+  font-size: 13px;
+}
+.yomitan-glossary li[data-dictionary="類語例解辞典"] th, 
+.yomitan-glossary li[data-dictionary="類語例解辞典"] td {
+  border: 1px solid #ccc;
+  padding: 4px 6px;
+}
+.yomitan-glossary [data-sc-name] { font-weight: bold; margin-top: 4px; display: inline-block; }
+
+/* ── Pixiv footer hidden ── */
+.yomitan-glossary [data-sc-pixiv="footer"] { display: none !important; }
+
+/* ── Dict Specific Layout Helpers ── */
+.yomitan-glossary [data-sc-content="level1"],
+.yomitan-glossary [data-sc-content="L3"],
+.yomitan-glossary [data-sc-l3],
+.yomitan-glossary [data-sc-mg],
+.yomitan-glossary [data-sc-meaning],
+.yomitan-glossary [data-sc-head2] { display: block; margin-top: 4px; }
+.yomitan-glossary [data-sc-pixiv="parent-link"],
+.yomitan-glossary [data-sc-pixiv="summary"] { display: block; margin-bottom: 4px; }
+
+/* ── Old Jitendex CSS ── */
+.yomitan-glossary ul[data-sc-content="sense-groups"] { list-style-type: none; padding-left: 0; margin-top: 0.2em; }
+.yomitan-glossary li[data-sc-content="sense-group"] { padding-left: 0; margin-bottom: 0.8em; }
+.yomitan-glossary li[data-sc-content="sense-group"]:first-child { margin-top: 0.1em; }
+.yomitan-glossary li[data-sc-content="sense"] { padding-left: 0.25em; margin-bottom: 0.4em; }
+.yomitan-glossary li[data-sc-content="sense"] ul[data-sc-content="glossary"] { list-style-type: none; padding-left: 0; margin-top: 0.1em; }
+.yomitan-glossary ul[data-sc-content="glossary"] { list-style-type: disc; margin-bottom: 0.2em; }
+.yomitan-glossary ul[data-sc-content="glossary"] li { display: inline; margin-right: 0.5em; }
+.yomitan-glossary ul[data-sc-content="glossary"] li:not(:last-child)::after { content: "; "; color: #888; }
+.yomitan-glossary span[data-sc-class="tag"] { border-radius: 0.25em; font-size: 0.75em; font-weight: 600; margin-right: 0.4em; padding: 0.15em 0.35em; vertical-align: baseline; word-break: keep-all; display: inline-block; line-height: 1; }
+.yomitan-glossary span[data-sc-content="part-of-speech-info"] { background-color: #4a5568; color: white; }
+.yomitan-glossary span[data-sc-content="misc-info"] { background-color: #9b2c2c; color: white; }
+.yomitan-glossary span[data-sc-content="field-info"] { background-color: #553c9a; color: white; }
+.yomitan-glossary span[data-sc-content="dialect-info"] { background-color: #276749; color: white; }
+.yomitan-glossary span[data-sc-content="forms-label"] { background-color: #4a5568; color: white; }
+.yomitan-glossary div[data-sc-class="extra-box"] { border-radius: 4px; border-left: 3px solid #cbd5e0; margin: 0.4em 0; padding: 0.4em 0.6em; background: rgba(0,0,0,0.03); font-size: 0.9em; }
+.yomitan-glossary div[data-sc-content="example-sentence"] { border-left-color: #aaa; }
+.yomitan-glossary div[data-sc-content="example-sentence-a"] { font-size: 1.1em; color: inherit; margin-bottom: 0.2em; }
+.yomitan-glossary div[data-sc-content="example-sentence-b"] { font-size: 0.9em; color: #718096; }
+.yomitan-glossary span[data-sc-content="example-keyword"] { color: #3182ce; font-weight: bold; }
+.yomitan-glossary div[data-sc-content="attribution"] { font-size: 0.75em; text-align: right; color: #aaa; margin-top: 0.5em; border-top: 1px solid #eee; padding-top: 0.2em; }
+.yomitan-glossary div[data-sc-content="attribution"] a { color: #aaa; text-decoration: none; }
+.yomitan-glossary div[data-sc-content="forms"] { margin-top: 0.5em; font-size: 0.85em; }
+.yomitan-glossary div[data-sc-content="forms"] table { border-collapse: collapse; margin-top: 0.3em; width: 100%; max-width: 400px; }
+.yomitan-glossary div[data-sc-content="forms"] th, .yomitan-glossary div[data-sc-content="forms"] td { border: 1px solid #e2e8f0; padding: 4px 6px; text-align: center; }
+.yomitan-glossary div[data-sc-content="forms"] tr[data-sc-content="forms-header-row"] th { background: #f7fafc; font-weight: 600; color: #4a5568; }
+.yomitan-glossary td[data-sc-class="form-pri"] > span { color: #276749; font-weight: bold; }
+.yomitan-glossary td[data-sc-class="form-pri"] > span::before { content: "◎ "; }
+.yomitan-glossary td[data-sc-class="form-irr"] > span { color: #c53030; }
+.yomitan-glossary td[data-sc-class="form-irr"] > span::before { content: "✕ "; }
+.yomitan-glossary td[data-sc-class="form-rare"] > span { color: #718096; }
+.yomitan-glossary td[data-sc-class="form-rare"] > span::before { content: "△ "; }
+

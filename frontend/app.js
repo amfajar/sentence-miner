@@ -72,6 +72,14 @@ function setupTabs() {
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
             btn.classList.add('active');
             document.getElementById(`tab-${tab}`).classList.add('active');
+            // Backfill: re-check Yomitan every time user switches to this tab
+            if (tab === 'backfill') {
+                initBackfillTab();
+            } else {
+                // Hide Yomitan banner when not on Backfill tab
+                const banner = document.getElementById('bf-yomitan-banner');
+                if (banner) banner.classList.add('hidden');
+            }
         });
     });
 }
@@ -253,6 +261,7 @@ function setupSlider() {
 function setupSettingsListeners() {
     const bindings = [
         ['s-ankiconnect-url', 'ankiconnect_url'],
+        ['s-yomitan-url', 'yomitan_api_url'],
         ['s-note-type', 'note_type'],
         ['s-deck-name', 'deck_name'],
         ['s-padding', 'clip_padding_ms', parseInt],
@@ -298,6 +307,7 @@ function setupSettingsListeners() {
 
 function applySettingsToUI(s) {
     setValue('s-ankiconnect-url', s.ankiconnect_url || 'http://localhost:8765');
+    setValue('s-yomitan-url', s.yomitan_api_url || 'http://127.0.0.1:19633');
     setValue('s-note-type', s.note_type || 'Lapis');
     setValue('s-deck-name', s.deck_name || 'Mining');
     setValue('s-padding', s.clip_padding_ms ?? 500);
@@ -412,6 +422,34 @@ async function testAnki() {
         btn.textContent = '✗ Not connected';
         btn.className = 'test-btn error';
         resultEl.textContent = result.error || 'Check that Anki is open with AnkiConnect installed.';
+        resultEl.classList.remove('hidden');
+    }
+}
+
+// ── Test Yomitan API ───────────────────────────────────────────────────────────
+async function testYomitan() {
+    const btn = document.getElementById('test-yomitan-btn');
+    const resultEl = document.getElementById('test-yomitan-result');
+    btn.textContent = 'Testing…';
+    btn.className = 'test-btn';
+    resultEl.classList.add('hidden');
+
+    // Save the URL first so backend uses the current value
+    const url = document.getElementById('s-yomitan-url').value.trim();
+    settings.yomitan_api_url = url;
+    await window.pywebview.api.save_settings(settings);
+
+    const result = await window.pywebview.api.check_yomitan();
+    if (result.ok) {
+        btn.textContent = '✓ Yomitan detected';
+        btn.className = 'test-btn success';
+        resultEl.classList.add('hidden');
+        // Also update the backfill banner if visible
+        await checkYomitan();
+    } else {
+        btn.textContent = '✗ Not detected';
+        btn.className = 'test-btn error';
+        resultEl.textContent = `Connection refused at ${url} — make sure Yomitan is open in your browser and "Enable Yomitan API" is ON in Yomitan Settings → General.`;
         resultEl.classList.remove('hidden');
     }
 }
@@ -1097,3 +1135,598 @@ async function detectEpubLength() {
         showError(`Could not detect length: ${result.error}`);
     }
 }
+
+// ── BACKFILL TAB ───────────────────────────────────────────────────────────────
+
+// Track backfill state in the frontend
+const bfState = {
+    yomitanOk: false,
+    decks: [],               // [{name, note_type, count}]
+    selectedDecks: new Set(),
+    detectedNoteType: null,  // note type shared by all selected decks
+    savedMappings: {},       // {NoteTypeName: {field: handlebar}}
+    savedConfig: {},         // {NoteTypeName: {expression_field, reading_field}}
+    noteFields: [],          // field names for current note type
+    expressionField: '',     // currently selected expression field
+    readingField: '',        // currently selected reading field (optional)
+    isPaused: false,
+};
+
+const HANDLEBAR_OPTIONS = [
+    'none',
+    '{expression}',
+    '{furigana}',
+    '{furigana-plain}',
+    '{reading}',
+    '{audio}',
+    '{glossary}',
+    '{glossary-brief}',
+    '{glossary-first}',
+    '{glossary-no-dictionary}',
+    '{pitch-accent-positions}',
+    '{pitch-accent-categories}',
+    '{pitch-accent-graphs}',
+    '{pitch-accent-graphs-jj}',
+    '{frequencies}',
+    '{frequency-harmonic-rank}',
+    '{frequency-average-rank}',
+    '{popup-selection-text}',
+    '{sentence}',
+    '{sentence-furigana}',
+    '{sentence-furigana-plain}',
+    '{tags}',
+    '{part-of-speech}',
+];
+
+// Called every time user navigates to the Backfill tab
+async function initBackfillTab() {
+    // Load saved mappings first (fast, local)
+    const res = await window.pywebview.api.get_backfill_settings();
+    if (res.ok) {
+        bfState.savedMappings = res.mappings || {};
+        bfState.savedConfig = res.config || {};
+    }
+
+    // Refresh mapping preview
+    refreshMappingPreview();
+
+    // Run Yomitan check AND deck loading in parallel — deck loading must never
+    // wait on Yomitan. The Yomitan result only affects the banner + Start button.
+    await Promise.all([
+        checkYomitan(),
+        loadDecksForBackfill(),
+    ]);
+
+    // If no saved mappings at all, auto-open configure mode
+    if (Object.keys(bfState.savedMappings).length === 0) {
+        showBackfillConfigureMode();
+    } else {
+        showBackfillRunMode();
+    }
+}
+
+let _checkYomitanInFlight = false;
+async function checkYomitan() {
+    if (_checkYomitanInFlight) return;
+    _checkYomitanInFlight = true;
+
+    const banner = document.getElementById('bf-yomitan-banner');
+    const msgEl = document.getElementById('bf-yomitan-banner-msg');
+    const retryBtn = banner && banner.querySelector('.bf-yomitan-retry-btn');
+    const statusEl = document.getElementById('bf-yomitan-status');
+
+    if (retryBtn) { retryBtn.textContent = '⏳ Checking…'; retryBtn.disabled = true; }
+    if (msgEl) msgEl.innerHTML = 'Checking Yomitan API…';
+
+    if (statusEl) {
+        statusEl.className = 'bf-yomitan-status connecting';
+        statusEl.innerHTML = '<div class="status-dot"></div> Yomitan API: Checking...';
+    }
+
+    try {
+        const res = await window.pywebview.api.check_yomitan();
+        bfState.yomitanOk = res.ok;
+        if (!res.ok && msgEl) {
+            const url = res.url || 'http://127.0.0.1:19633';
+            msgEl.innerHTML = `Cannot connect to <code>${url}</code>. In Yomitan Settings → General, enable <b>Yomitan API</b>, then click Retry.`;
+        }
+    } catch (e) {
+        bfState.yomitanOk = false;
+        if (msgEl) msgEl.innerHTML = 'Yomitan API not detected. In Yomitan Settings → General, enable <b>Yomitan API</b>, then click Retry.';
+    }
+
+    if (statusEl) {
+        if (bfState.yomitanOk) {
+            statusEl.className = 'bf-yomitan-status connected';
+            statusEl.innerHTML = '<div class="status-dot"></div> Yomitan API: Connected';
+        } else {
+            statusEl.className = 'bf-yomitan-status error';
+            statusEl.innerHTML = '<div class="status-dot"></div> Yomitan API: Disconnected';
+        }
+    }
+
+    if (banner) banner.classList.toggle('hidden', bfState.yomitanOk);
+    if (retryBtn) { retryBtn.textContent = '↻ Retry'; retryBtn.disabled = false; }
+    updateBackfillStartBtn();
+    _checkYomitanInFlight = false;
+}
+
+function updateBackfillStartBtn() {
+    const startBtn = document.getElementById('bf-start-btn');
+    if (!startBtn) return;
+    const yomitanOk = bfState.yomitanOk;
+    const hasDecks = bfState.selectedDecks.size > 0;
+    const hasMappings = bfState.detectedNoteType &&
+        bfState.savedMappings[bfState.detectedNoteType] &&
+        Object.keys(bfState.savedMappings[bfState.detectedNoteType]).length > 0;
+    const validSelection = bfState.detectedNoteType !== null && hasDecks;
+    startBtn.disabled = !yomitanOk || !validSelection || !hasMappings;
+}
+
+async function loadDecksForBackfill(forceRefresh = false) {
+    const listEl = document.getElementById('bf-deck-list');
+    const placeholder = document.getElementById('bf-deck-placeholder');
+    if (!listEl) return;
+
+    if (placeholder) placeholder.textContent = 'Loading decks\u2026';
+
+    try {
+        const res = await window.pywebview.api.get_anki_decks_with_notetypes(forceRefresh);
+        if (!res.ok) {
+            if (placeholder) placeholder.textContent = `\u26a0 Could not load decks: ${res.error}`;
+            return;
+        }
+        bfState.decks = res.decks || [];
+        renderDeckList();
+    } catch (e) {
+        if (placeholder) placeholder.textContent = `\u26a0 AnkiConnect error: ${e}`;
+    }
+}
+
+async function refreshBackfillDecks() {
+    const btn = document.getElementById('bf-refresh-decks-btn');
+    if (btn) btn.disabled = true;
+
+    // Clear selection so user has to re-select after refresh
+    bfState.selectedDecks.clear();
+    onDeckSelectionChange();
+
+    await loadDecksForBackfill(true); // force refresh
+
+    if (btn) btn.disabled = false;
+}
+
+function renderDeckList() {
+    const listEl = document.getElementById('bf-deck-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+
+    if (bfState.decks.length === 0) {
+        listEl.innerHTML = '<div class="bf-deck-placeholder">No decks found in Anki.</div>';
+        return;
+    }
+
+    bfState.decks.forEach(deck => {
+        const row = document.createElement('label');
+        row.className = 'bf-deck-row';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'bf-deck-cb';
+        cb.value = deck.name;
+        cb.checked = bfState.selectedDecks.has(deck.name);
+        cb.addEventListener('change', () => {
+            if (cb.checked) bfState.selectedDecks.add(deck.name);
+            else bfState.selectedDecks.delete(deck.name);
+            onDeckSelectionChange();
+        });
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'bf-deck-name';
+        nameSpan.textContent = deck.name;
+
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'bf-deck-meta';
+        metaSpan.textContent = deck.note_type
+            ? `${deck.count.toLocaleString()} cards \u00b7 ${deck.note_type}`
+            : `${deck.count.toLocaleString()} cards`;
+
+        row.appendChild(cb);
+        row.appendChild(nameSpan);
+        row.appendChild(metaSpan);
+        listEl.appendChild(row);
+    });
+}
+
+function onDeckSelectionChange() {
+    const validationRow = document.getElementById('bf-validation-row');
+    const validationIcon = document.getElementById('bf-validation-icon');
+    const validationMsg = document.getElementById('bf-validation-msg');
+
+    if (bfState.selectedDecks.size === 0) {
+        validationRow.classList.add('hidden');
+        bfState.detectedNoteType = null;
+        updateBackfillStartBtn();
+        return;
+    }
+
+    // Find note types for selected decks
+    const selectedDeckData = bfState.decks.filter(d => bfState.selectedDecks.has(d.name));
+    const noteTypes = [...new Set(selectedDeckData.map(d => d.note_type).filter(Boolean))];
+
+    validationRow.classList.remove('hidden');
+
+    if (noteTypes.length > 1) {
+        // Mismatch
+        bfState.detectedNoteType = null;
+        validationIcon.textContent = '\u26a0';
+        validationIcon.className = 'bf-validation-icon error';
+        validationMsg.textContent =
+            `Selected decks use different note types (${noteTypes.join(', ')}). Only decks with the same note type can be backfilled together.`;
+        validationMsg.className = 'bf-validation-msg error';
+        updateBackfillStartBtn();
+    } else if (noteTypes.length === 1) {
+        bfState.detectedNoteType = noteTypes[0];
+        const totalCards = selectedDeckData.reduce((sum, d) => sum + (d.count || 0), 0);
+        validationIcon.textContent = '\u2713';
+        validationIcon.className = 'bf-validation-icon ok';
+        validationMsg.textContent =
+            `Ready: ${totalCards.toLocaleString()} cards across ${bfState.selectedDecks.size} deck(s) \u2014 Note type: ${noteTypes[0]}`;
+        validationMsg.className = 'bf-validation-msg ok';
+        // Also refresh the mapping preview for this note type
+        refreshMappingPreview();
+        updateBackfillStartBtn();
+    } else {
+        // No note types known (empty decks)
+        bfState.detectedNoteType = null;
+        validationIcon.textContent = '\u26a0';
+        validationIcon.className = 'bf-validation-icon error';
+        validationMsg.textContent = 'Selected decks appear to be empty or have unknown note types.';
+        validationMsg.className = 'bf-validation-msg error';
+        updateBackfillStartBtn();
+    }
+}
+
+function refreshMappingPreview() {
+    const previewList = document.getElementById('bf-preview-list');
+    const previewEmpty = document.getElementById('bf-preview-empty');
+    if (!previewList || !previewEmpty) return;
+
+    const noteType = bfState.detectedNoteType;
+    const mapping = noteType ? (bfState.savedMappings[noteType] || {}) : {};
+    const entries = Object.entries(mapping).filter(([, v]) => v && v !== 'none');
+
+    if (entries.length === 0) {
+        previewEmpty.classList.remove('hidden');
+        previewList.classList.add('hidden');
+    } else {
+        previewEmpty.classList.add('hidden');
+        previewList.classList.remove('hidden');
+        previewList.innerHTML = entries
+            .map(([field, hb]) =>
+                `<div class="bf-preview-row"><span class="bf-preview-field">${escapeHtml(field)}</span><span class="bf-preview-arrow">\u2192</span><span class="bf-preview-hb">${escapeHtml(hb)}</span></div>`
+            ).join('');
+    }
+}
+
+function showBackfillRunMode() {
+    document.getElementById('bf-run-mode').classList.remove('hidden');
+    document.getElementById('bf-configure-mode').classList.add('hidden');
+}
+
+async function showBackfillConfigureMode() {
+    document.getElementById('bf-run-mode').classList.add('hidden');
+    document.getElementById('bf-configure-mode').classList.remove('hidden');
+
+    // Determine the note type to configure (from selected decks, or from existing mappings)
+    let noteType = bfState.detectedNoteType;
+    if (!noteType && Object.keys(bfState.savedMappings).length > 0) {
+        noteType = Object.keys(bfState.savedMappings)[0];
+    }
+    if (!noteType) noteType = '';
+
+    const noteTypeEl = document.getElementById('bf-configure-note-type');
+    if (noteTypeEl) noteTypeEl.textContent = noteType || '(none detected \u2014 select decks first)';
+
+    // Fetch note fields from Anki
+    if (noteType) {
+        const res = await window.pywebview.api.get_anki_model_fields(noteType);
+        bfState.noteFields = res.ok ? (res.fields || []) : [];
+    } else {
+        bfState.noteFields = [];
+    }
+
+    // Load saved config for this note type (expression/reading fields)
+    const savedCfg = (noteType && bfState.savedConfig[noteType]) || {};
+    bfState.expressionField = savedCfg.expression_field || _detectDefaultExpressionField(bfState.noteFields);
+    bfState.readingField = savedCfg.reading_field || _detectDefaultReadingField(bfState.noteFields);
+
+    // Populate Expression Field and Reading Field dropdowns
+    _populateSourceFieldSelect('bf-expression-field-sel', bfState.noteFields, bfState.expressionField, false);
+    _populateSourceFieldSelect('bf-reading-field-sel', bfState.noteFields, bfState.readingField, true);
+
+    renderMappingTable(noteType);
+}
+
+// Auto-detect a sensible default expression field
+function _detectDefaultExpressionField(fields) {
+    const candidates = ['Expression', 'Word', 'VocabKanji', 'Vocab', 'Front'];
+    for (const c of candidates) {
+        if (fields.includes(c)) return c;
+    }
+    return fields[0] || '';
+}
+
+// Auto-detect a sensible default reading field
+function _detectDefaultReadingField(fields) {
+    const candidates = ['Reading', 'VocabFurigana', 'Furigana', 'Kana'];
+    for (const c of candidates) {
+        if (fields.includes(c)) return c;
+    }
+    return '';
+}
+
+// Populate a select dropdown with Anki fields, adding 'none' option for reading
+function _populateSourceFieldSelect(selectId, fields, currentValue, allowNone) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    sel.innerHTML = '';
+    if (allowNone) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '(none)';
+        if (!currentValue) opt.selected = true;
+        sel.appendChild(opt);
+    }
+    fields.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        if (f === currentValue) opt.selected = true;
+        sel.appendChild(opt);
+    });
+}
+
+function renderMappingTable(noteType) {
+    const tbody = document.getElementById('bf-mapping-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    const savedMapping = (noteType && bfState.savedMappings[noteType]) || {};
+
+    if (bfState.noteFields.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" style="padding:20px;text-align:center;color:var(--text-dim)">No fields found. Select decks with a known note type first.</td></tr>';
+        return;
+    }
+
+    bfState.noteFields.forEach(field => {
+        const tr = document.createElement('tr');
+        tr.className = 'bf-tr';
+
+        const tdField = document.createElement('td');
+        tdField.className = 'bf-td bf-td-field';
+        tdField.textContent = field;
+
+        const tdHb = document.createElement('td');
+        tdHb.className = 'bf-td';
+
+        const sel = document.createElement('select');
+        sel.className = 'bf-hb-select';
+        sel.dataset.field = field;
+
+        HANDLEBAR_OPTIONS.forEach(opt => {
+            const option = document.createElement('option');
+            option.value = opt;
+            option.textContent = opt;
+            if ((savedMapping[field] || 'none') === opt) option.selected = true;
+            sel.appendChild(option);
+        });
+
+        tdHb.appendChild(sel);
+        tr.appendChild(tdField);
+        tr.appendChild(tdHb);
+        tbody.appendChild(tr);
+    });
+}
+
+async function saveBackfillMapping() {
+    const noteType = bfState.detectedNoteType || document.getElementById('bf-configure-note-type').textContent;
+    if (!noteType || noteType.includes('(none detected')) {
+        alert('Please select decks with a known note type before saving the mapping.');
+        return;
+    }
+
+    const selects = document.querySelectorAll('#bf-mapping-tbody .bf-hb-select');
+    const mapping = {};
+    selects.forEach(sel => {
+        mapping[sel.dataset.field] = sel.value;
+    });
+
+    // Read Expression Field and Reading Field selections
+    const expressionFieldSel = document.getElementById('bf-expression-field-sel');
+    const readingFieldSel = document.getElementById('bf-reading-field-sel');
+    const expressionField = expressionFieldSel ? expressionFieldSel.value : '';
+    const readingField = readingFieldSel ? readingFieldSel.value : '';
+
+    if (!expressionField) {
+        alert('Please select an Expression Field before saving.');
+        return;
+    }
+
+    const res = await window.pywebview.api.save_backfill_settings(
+        noteType, mapping, expressionField, readingField
+    );
+    if (res.ok) {
+        // Update local cache
+        const clean = Object.fromEntries(Object.entries(mapping).filter(([, v]) => v && v !== 'none'));
+        bfState.savedMappings[noteType] = clean;
+        if (!bfState.savedConfig) bfState.savedConfig = {};
+        bfState.savedConfig[noteType] = { expression_field: expressionField, reading_field: readingField };
+        bfState.expressionField = expressionField;
+        bfState.readingField = readingField;
+        refreshMappingPreview();
+        showBackfillRunMode();
+        updateBackfillStartBtn();
+    } else {
+        alert(`Failed to save mapping: ${res.error}`);
+    }
+}
+
+function cancelBackfillConfigure() {
+    showBackfillRunMode();
+}
+
+async function startBackfill() {
+    if (!bfState.yomitanOk) return;
+    if (bfState.selectedDecks.size === 0) return;
+
+    const noteType = bfState.detectedNoteType;
+    const fieldMapping = noteType ? (bfState.savedMappings[noteType] || {}) : {};
+    const cfg = (noteType && bfState.savedConfig && bfState.savedConfig[noteType]) || {};
+    const expressionField = cfg.expression_field || bfState.expressionField || 'Expression';
+    const readingField = cfg.reading_field || bfState.readingField || '';
+
+    if (Object.keys(fieldMapping).length === 0) {
+        alert('No field mapping configured for this note type. Please configure fields first.');
+        showBackfillConfigureMode();
+        return;
+    }
+
+    if (!expressionField) {
+        alert('No Expression Field configured. Please configure fields first.');
+        showBackfillConfigureMode();
+        return;
+    }
+
+    // Show progress area
+    document.getElementById('bf-start-btn').disabled = true;
+    document.getElementById('bf-progress-area').classList.remove('hidden');
+    document.getElementById('bf-summary-card').classList.add('hidden');
+    document.getElementById('bf-progress-fill').style.width = '0%';
+    document.getElementById('bf-progress-status').textContent = 'Starting\u2026';
+    document.getElementById('bf-progress-count').textContent = '0 / 0';
+    document.getElementById('bf-progress-pct').textContent = '0%';
+    bfState.isPaused = false;
+    updatePauseButton();
+
+    const res = await window.pywebview.api.start_backfill(
+        Array.from(bfState.selectedDecks),
+        fieldMapping,
+        expressionField,
+        readingField
+    );
+    if (!res.ok) {
+        document.getElementById('bf-progress-area').classList.add('hidden');
+        document.getElementById('bf-start-btn').disabled = false;
+        alert(`Failed to start backfill: ${res.error}`);
+    }
+}
+
+async function toggleBackfillPause() {
+    if (bfState.isPaused) {
+        await window.pywebview.api.resume_backfill();
+        bfState.isPaused = false;
+    } else {
+        await window.pywebview.api.pause_backfill();
+        bfState.isPaused = true;
+    }
+    updatePauseButton();
+}
+
+function updatePauseButton() {
+    const icon = document.getElementById('bf-pause-icon');
+    const text = document.getElementById('bf-pause-text');
+    if (bfState.isPaused) {
+        if (icon) icon.textContent = '\u25b6';
+        if (text) text.textContent = 'Resume';
+    } else {
+        if (icon) icon.textContent = '\u23f8';
+        if (text) text.textContent = 'Pause';
+    }
+}
+
+async function cancelBackfill() {
+    await window.pywebview.api.cancel_backfill();
+    bfState.isPaused = false;
+    updatePauseButton();
+}
+
+// Called from Python via evaluate_js('onBackfillProgress(...)')
+function onBackfillProgress(data) {
+    const status = document.getElementById('bf-progress-status');
+    const fill = document.getElementById('bf-progress-fill');
+    const countEl = document.getElementById('bf-progress-count');
+    const pctEl = document.getElementById('bf-progress-pct');
+
+    if (status && data.msg) status.textContent = data.msg;
+
+    const total = data.total || 0;
+    const current = data.current || 0;
+    const pct = total > 0 ? Math.round(current / total * 100) : 0;
+    if (fill) fill.style.width = `${pct}%`;
+    if (countEl) countEl.textContent = `${current.toLocaleString()} / ${total.toLocaleString()}`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+
+    // Handle terminal states
+    const state = data.state;
+    if (state === 'done' || state === 'cancelled' || state === 'error') {
+        document.getElementById('bf-progress-area').classList.add('hidden');
+        showBackfillSummary(data);
+        document.getElementById('bf-start-btn').disabled = false;
+        updateBackfillStartBtn();
+    } else if (state === 'paused') {
+        bfState.isPaused = true;
+        updatePauseButton();
+    } else if (state === 'running') {
+        bfState.isPaused = false;
+        updatePauseButton();
+    }
+}
+
+function showBackfillSummary(data) {
+    const card = document.getElementById('bf-summary-card');
+    const iconEl = document.getElementById('bf-summary-icon');
+    const titleEl = document.getElementById('bf-summary-title');
+    const bodyEl = document.getElementById('bf-summary-body');
+    if (!card) return;
+
+    const isError = data.state === 'error';
+    const isCancelled = data.state === 'cancelled';
+
+    if (isError) {
+        iconEl.textContent = '\u2715';
+        iconEl.style.color = 'var(--red)';
+        titleEl.textContent = 'Backfill failed';
+    } else if (isCancelled) {
+        iconEl.textContent = '\u23f9';
+        iconEl.style.color = 'var(--yellow)';
+        titleEl.textContent = 'Backfill cancelled';
+    } else {
+        iconEl.textContent = '\u2713';
+        iconEl.style.color = 'var(--green)';
+        titleEl.textContent = 'Backfill complete';
+    }
+
+    const errorNote = (data.errors || 0) > 0
+        ? `<span style="color:var(--red)">${data.errors} error${data.errors !== 1 ? 's' : ''} \u2014 see SentenceMiner.log for details</span>`
+        : `0 errors`;
+
+    bodyEl.innerHTML = `
+        <div class="bf-summary-row"><span class="bf-summary-num green">${(data.updated || 0).toLocaleString()}</span><span>updated</span></div>
+        <div class="bf-summary-row"><span class="bf-summary-num yellow">${(data.skipped || 0).toLocaleString()}</span><span>skipped (word not found in Yomitan)</span></div>
+        <div class="bf-summary-row">${errorNote}</div>
+        ${bfState.detectedNoteType ? `<div class="bf-summary-row muted">${Array.from(bfState.selectedDecks).join(', ')} \u00b7 note type: ${bfState.detectedNoteType}</div>` : ''}
+    `;
+
+    card.classList.remove('hidden');
+}
+
+function resetBackfillUI() {
+    document.getElementById('bf-summary-card').classList.add('hidden');
+    document.getElementById('bf-progress-area').classList.add('hidden');
+    document.getElementById('bf-progress-fill').style.width = '0%';
+    bfState.isPaused = false;
+    updatePauseButton();
+    updateBackfillStartBtn();
+}
+

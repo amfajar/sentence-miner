@@ -18,6 +18,7 @@ from uuid import uuid4
 import webview
 
 import settings as settings_module
+from pipeline import backfill as backfill_module
 from pipeline import nlp, furigana, dictionary, frequency, anki, audio_sources, media, youtube, epub
 from pipeline import sudachi_setup
 from pipeline.dictionary import DictionaryDB
@@ -82,6 +83,13 @@ class Api:
         self._running = False
         self._nlp_ready = False
         self._anki_media_dir: str | None = None
+        # Backfill state
+        self._bf_pause_event: threading.Event = threading.Event()
+        self._bf_cancel_event: threading.Event = threading.Event()
+        self._bf_status: dict = {'state': 'idle', 'current': 0, 'total': 0,
+                                  'updated': 0, 'skipped': 0, 'errors': 0, 'msg': ''}
+        # Apply Yomitan API URL from settings to backfill module
+        backfill_module.YOMITAN_BASE_URL = self._settings.yomitan_api_url
 
     # -- Settings --------------------------------------------------------------
 
@@ -94,6 +102,8 @@ class Api:
         for k, v in data.items():
             if hasattr(self._settings, k):
                 setattr(self._settings, k, v)
+        # Propagate Yomitan API URL immediately so the running instance picks it up
+        backfill_module.YOMITAN_BASE_URL = self._settings.yomitan_api_url
         settings_module.save(self._settings)
 
     def import_dictionary(self, src_path: str, dict_type: str) -> dict:
@@ -1373,3 +1383,193 @@ class Api:
         except Exception as e:
             log.error(f"Error scanning folder for pairs {folder_path}: {e}\n{traceback.format_exc()}")
             return {'ok': False, 'error': str(e)}
+
+    # -- Backfill ----------------------------------------------------------------
+    def check_yomitan(self) -> dict:
+        """Check whether the Yomitan API is reachable. Returns {ok: bool, url: str, error?: str}."""
+        url = backfill_module.YOMITAN_BASE_URL
+        try:
+            ok = backfill_module.check_yomitan()
+            return {'ok': ok, 'url': url}
+        except Exception as e:
+            return {'ok': False, 'url': url, 'error': str(e)}
+    def get_backfill_settings(self) -> dict:
+        """
+        Return saved backfill settings from settings.json.
+        Returns {ok, mappings, config} where:
+          mappings = {NoteTypeName: {field: handlebar}}
+          config = {NoteTypeName: {expression_field, reading_field}}
+        """
+        try:
+            path = settings_module.SETTINGS_FILE
+            if not os.path.exists(path):
+                return {'ok': True, 'mappings': {}, 'config': {}}
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return {
+                'ok': True,
+                'mappings': data.get('backfill_mappings', {}),
+                'config': data.get('backfill_config', {}),
+            }
+        except Exception as e:
+            log.error(f'[backfill] get_backfill_settings error: {e}')
+            return {'ok': False, 'error': str(e), 'mappings': {}, 'config': {}}
+    def save_backfill_settings(self, note_type: str, mapping: dict,
+                                expression_field: str = '', reading_field: str = '') -> dict:
+        """
+        Save field mapping + config for a note type into settings.json.
+        Fields set to 'none' are omitted from the saved mapping.
+        mapping: {anki_field_name: handlebar_or_'none'}
+        expression_field: Anki field used as lookup key (never overwritten)
+        reading_field: Optional Anki field with kana reading
+        """
+        try:
+            path = settings_module.SETTINGS_FILE
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            else:
+                data = {}
+            clean_mapping = {k: v for k, v in mapping.items() if v and v != 'none'}
+            if 'backfill_mappings' not in data:
+                data['backfill_mappings'] = {}
+            data['backfill_mappings'][note_type] = clean_mapping
+            # Save config (expression/reading field) separately
+            if 'backfill_config' not in data:
+                data['backfill_config'] = {}
+            data['backfill_config'][note_type] = {
+                'expression_field': expression_field,
+                'reading_field': reading_field,
+            }
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            log.info(f'[backfill] Saved mapping for "{note_type}": fields={list(clean_mapping.keys())}, '
+                     f'expression_field={expression_field!r}, reading_field={reading_field!r}')
+            return {'ok': True}
+        except Exception as e:
+            log.error(f'[backfill] save_backfill_settings error: {e}')
+            return {'ok': False, 'error': str(e)}
+    def _get_notetype_for_deck(self, url: str, deck_name: str) -> tuple[str, str, int]:
+        """Fetch sample note type and fallback count for a single deck."""
+        note_type = None
+        count = 0
+        try:
+            sample_ids = anki._request(url, 'findNotes', query=f'deck:"{deck_name}"')
+            if sample_ids:
+                count = len(sample_ids)
+                sample = anki._request(url, 'notesInfo', notes=[sample_ids[0]])
+                if sample:
+                    note_type = sample[0].get('modelName')
+        except Exception as e:
+            log.warning(f'[backfill] Could not determine note type for deck "{deck_name}": {e}')
+        return deck_name, note_type, count
+    def get_anki_decks_with_notetypes(self, force_refresh: bool = False) -> dict:
+        """
+        Return all Anki decks with their note type and card count.
+        Returns {ok, decks: [{name, note_type, count}]}.
+        """
+        if hasattr(self, '_cached_decks') and self._cached_decks and not force_refresh:
+            log.info('[perf] get_anki_decks_with_notetypes: returning cached decks list')
+            return {'ok': True, 'decks': self._cached_decks}
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            t_start = time.perf_counter()
+            url = self._settings.ankiconnect_url
+            # Step 1: get all deck names (1 request, ~2s)
+            deck_names = anki._request(url, 'deckNames') or []
+            
+            # Step 2: fetch note type for ALL decks IN PARALLEL
+            results = {}
+            with ThreadPoolExecutor(max_workers=26) as executor:
+                futures = {
+                    executor.submit(self._get_notetype_for_deck, url, deck): deck 
+                    for deck in deck_names
+                }
+                for future in as_completed(futures):
+                    deck_name, note_type, count = future.result()
+                    results[deck_name] = {'note_type': note_type, 'count': count}
+            
+            t_parallel = (time.perf_counter() - t_start) * 1000
+            log.info(f'[backfill] get_decks: {len(deck_names)} parallel lookups completed in {t_parallel:.0f}ms (was 105s sequential)')
+            result_decks = [
+                {'name': name, 'note_type': data['note_type'], 'count': data['count']} 
+                for name, data in results.items()
+            ]
+            self._cached_decks = result_decks
+            return {'ok': True, 'decks': result_decks}
+        except Exception as e:
+            log.error(f'[backfill] get_anki_decks_with_notetypes error: {e}')
+            return {'ok': False, 'error': str(e), 'decks': []}
+    def get_anki_model_fields(self, model_name: str) -> dict:
+        """Return field names for the given note type. Returns {ok, fields: [str]}."""
+        try:
+            url = self._settings.ankiconnect_url
+            fields = anki._request(url, 'modelFieldNames', modelName=model_name)
+            return {'ok': True, 'fields': fields or []}
+        except Exception as e:
+            log.error(f'[backfill] get_anki_model_fields error: {e}')
+            return {'ok': False, 'error': str(e), 'fields': []}
+    def start_backfill(self, deck_names: list, field_mapping: dict,
+                        expression_field: str = 'Expression', reading_field: str = '') -> dict:
+        """
+        Start the backfill pipeline in a background thread.
+        deck_names: list of deck names to process
+        field_mapping: {anki_field: handlebar} (only non-none entries)
+        expression_field: Anki field used as lookup key (read-only, never overwritten)
+        reading_field: Optional Anki field for reading-based disambiguation
+        Progress is pushed to the frontend as onBackfillProgress(data) events.
+        """
+        if self._bf_status.get('state') == 'running':
+            return {'ok': False, 'error': 'Backfill already in progress.'}
+        # Reset flags
+        self._bf_pause_event.clear()
+        self._bf_cancel_event.clear()
+        self._bf_status = {'state': 'running', 'current': 0, 'total': 0,
+                           'updated': 0, 'skipped': 0, 'errors': 0, 'msg': 'Starting…'}
+        def _on_progress(prog: dict):
+            self._bf_status = prog
+            js = f"onBackfillProgress({json.dumps(prog, ensure_ascii=False)})"
+            try:
+                webview.windows[0].evaluate_js(js)
+            except Exception:
+                pass
+        def _run():
+            try:
+                backfill_module.run_backfill(
+                    ankiconnect_url=self._settings.ankiconnect_url,
+                    deck_names=deck_names,
+                    field_mapping=field_mapping,
+                    on_progress=_on_progress,
+                    pause_event=self._bf_pause_event,
+                    cancel_event=self._bf_cancel_event,
+                    expression_field=expression_field,
+                    reading_field=reading_field,
+                )
+            except Exception as e:
+                import traceback as _tb
+                log.error(f'[backfill] Unhandled error in backfill thread: {e}\n{_tb.format_exc()}')
+                _on_progress({'state': 'error', 'current': 0, 'total': 0,
+                              'updated': 0, 'skipped': 0, 'errors': 1, 'msg': str(e)})
+        threading.Thread(target=_run, daemon=True, name='backfill-thread').start()
+        log.info(f'[backfill] Started backfill: decks={deck_names}, '
+                 f'expression_field={expression_field!r}, reading_field={reading_field!r}')
+        return {'ok': True}
+    def pause_backfill(self) -> dict:
+        """Signal the backfill thread to pause after the current chunk."""
+        self._bf_pause_event.set()
+        log.info('[backfill] Pause requested.')
+        return {'ok': True}
+    def resume_backfill(self) -> dict:
+        """Resume a paused backfill."""
+        self._bf_pause_event.clear()
+        log.info('[backfill] Resume requested.')
+        return {'ok': True}
+    def cancel_backfill(self) -> dict:
+        """Signal the backfill thread to cancel after the current chunk."""
+        self._bf_cancel_event.set()
+        self._bf_pause_event.clear()  # Unblock if paused
+        log.info('[backfill] Cancel requested.')
+        return {'ok': True}
+    def get_backfill_status(self) -> dict:
+        """Return current backfill status snapshot."""
+        return dict(self._bf_status)

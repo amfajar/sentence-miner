@@ -13,6 +13,8 @@ import os
 import sys
 import subprocess
 
+_CREATIONFLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0
+
 
 def _get_binary(name: str) -> str:
     """
@@ -56,7 +58,7 @@ def get_media_duration_ms(media_path: str) -> int:
         media_path
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=_CREATIONFLAGS)
         duration_s = float(result.stdout.strip())
         return int(duration_s * 1000)
     except Exception as e:
@@ -108,7 +110,7 @@ def extract_audio_clip(
         output_path, '-y',
     ]
     try:
-        subprocess.run(cmd, capture_output=True, check=True, timeout=60)
+        subprocess.run(cmd, capture_output=True, check=True, timeout=60, creationflags=_CREATIONFLAGS)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg audio extract failed: {e.stderr.decode()}")
     return output_path
@@ -142,7 +144,7 @@ def extract_frame(
         output_path, '-y',
     ]
     try:
-        subprocess.run(cmd, capture_output=True, check=True, timeout=60)
+        subprocess.run(cmd, capture_output=True, check=True, timeout=60, creationflags=_CREATIONFLAGS)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg frame extract failed: {e.stderr.decode()}")
     return output_path
@@ -203,6 +205,6 @@ def extract_media(
         ])
 
     try:
-        subprocess.run(cmd, capture_output=True, check=True, timeout=60)
+        subprocess.run(cmd, capture_output=True, check=True, timeout=60, creationflags=_CREATIONFLAGS)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg combined extract failed: {e.stderr.decode()}")
