@@ -185,6 +185,9 @@ def lookup_word(word: str, reading: str = '', include_media: bool = True, max_re
         if has_single_frequency and 'frequencies' not in api_markers:
             api_markers.append('frequencies')
         
+    if 'reading' not in api_markers:
+        api_markers.append('reading')
+        
     request_body = {
         'text': word,
         'type': 'term',
@@ -1218,18 +1221,9 @@ def run_backfill(
                     res_word, new_fields = future.result()
                     if new_fields:
                         for nid in note_ids_for_word:
-                            # --- OPTIMIZATION: Delta-check (Only write if fields actually changed) ---
-                            existing = existing_notes_fields.get(nid, {})
-                            changed_fields = {}
-                            for k, v in new_fields.items():
-                                if existing.get(k) != v:
-                                    changed_fields[k] = v
-                                    
-                            if changed_fields:
-                                updates_by_note_id[nid] = changed_fields
-                                updated += 1
-                            else:
-                                skipped_unchanged += 1
+                            # Force overwrite all fields as requested by the user to ensure data is updated fully
+                            updates_by_note_id[nid] = new_fields
+                            updated += 1
                     else:
                         skipped_not_found += num_notes
                 except Exception as e:
