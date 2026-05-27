@@ -1025,7 +1025,8 @@ def run_backfill(
         log.warning(f'[backfill] Could not get Anki media directory (audio may fail to save): {e}')
         
     updated = 0
-    skipped = 0
+    skipped_not_found = 0
+    skipped_unchanged = 0
     errors = 0
     
     def push(state: str, current: int, total: int, msg: str = ''):
@@ -1034,7 +1035,9 @@ def run_backfill(
             'current': current,
             'total': total,
             'updated': updated,
-            'skipped': skipped,
+            'skipped': skipped_not_found + skipped_unchanged,
+            'skipped_not_found': skipped_not_found,
+            'skipped_unchanged': skipped_unchanged,
             'errors': errors,
             'msg': msg,
         })
@@ -1089,7 +1092,7 @@ def run_backfill(
             word = expr_field_data.get('value', '').strip() if isinstance(expr_field_data, dict) else ''
             
             if not word:
-                skipped += 1
+                skipped_not_found += 1
                 continue
                 
             reading = ''
@@ -1107,7 +1110,7 @@ def run_backfill(
 
         # 4. Process unique words concurrently
         updates_by_note_id = {}
-        current_notes_processed = skipped  # start with already skipped
+        current_notes_processed = skipped_not_found  # start with already skipped
         
         # Pre-compute mapped markers (bare options) so we only fetch what is actually requested
         mapped_markers = {v.strip('{}') for v in field_mapping.values() if v and v != 'none'}
@@ -1196,9 +1199,9 @@ def run_backfill(
                                 updates_by_note_id[nid] = changed_fields
                                 updated += 1
                             else:
-                                skipped += 1
+                                skipped_unchanged += 1
                     else:
-                        skipped += num_notes
+                        skipped_not_found += num_notes
                 except Exception as e:
                     log.error(f'[backfill] Error processing word "{word}": {e}')
                     errors += num_notes
@@ -1209,7 +1212,14 @@ def run_backfill(
 
         if cancel_event.is_set():
             push('cancelled', current_notes_processed, total, 'Cancelled.')
-            return {'updated': updated, 'skipped': skipped, 'errors': errors, 'total': total}
+            return {
+                'updated': updated,
+                'skipped': skipped_not_found + skipped_unchanged,
+                'skipped_not_found': skipped_not_found,
+                'skipped_unchanged': skipped_unchanged,
+                'errors': errors,
+                'total': total
+            }
 
         # 5. Bulk Update Anki in chunks of 150 (Only modified cards)
         if updates_by_note_id:
@@ -1240,13 +1250,29 @@ def run_backfill(
                     updated -= len(batch)
 
         t_total = (time.perf_counter() - t_start)
-        log.info(f'[perf] Backfill complete: {updated} updated, {skipped} skipped, {errors} errors in {t_total:.1f}s')
+        skipped = skipped_not_found + skipped_unchanged
+        log.info(f'[perf] Backfill complete: {updated} updated, {skipped} skipped ({skipped_unchanged} unchanged, {skipped_not_found} not found), {errors} errors in {t_total:.1f}s')
         push('done', total, total, f'Backfill complete - {updated:,} updated, {skipped:,} skipped, {errors} errors.')
         
-        return {'updated': updated, 'skipped': skipped, 'errors': errors, 'total': total}
+        return {
+            'updated': updated,
+            'skipped': skipped,
+            'skipped_not_found': skipped_not_found,
+            'skipped_unchanged': skipped_unchanged,
+            'errors': errors,
+            'total': total
+        }
 
     except Exception as e:
         tb = traceback.format_exc()
         log.error(f'[backfill] Fatal error: {e}\n{tb}')
+        skipped = skipped_not_found + skipped_unchanged
         push('error', 0, 0, f'Fatal error: {e}')
-        return {'updated': updated, 'skipped': skipped, 'errors': errors + 1, 'total': 0}
+        return {
+            'updated': updated,
+            'skipped': skipped,
+            'skipped_not_found': skipped_not_found,
+            'skipped_unchanged': skipped_unchanged,
+            'errors': errors + 1,
+            'total': 0
+        }

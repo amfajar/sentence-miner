@@ -2420,6 +2420,10 @@ a:hover {
     color: var(--yellow);
 }
 
+.bf-summary-num.blue {
+    color: hsl(200, 85%, 65%);
+}
+
 /* Configure mode */
 .bf-table-wrap {
     border: 1px solid var(--border);

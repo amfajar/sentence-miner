@@ -1795,9 +1795,14 @@ function showBackfillSummary(data) {
         ? `<span style="color:var(--red)">${data.errors} error${data.errors !== 1 ? 's' : ''} \u2014 see SentenceMiner.log for details</span>`
         : `0 errors`;
 
+    const updated = data.updated || 0;
+    const skippedUnchanged = data.skipped_unchanged || 0;
+    const skippedNotFound = data.skipped_not_found !== undefined ? data.skipped_not_found : (data.skipped || 0);
+
     bodyEl.innerHTML = `
-        <div class="bf-summary-row"><span class="bf-summary-num green">${(data.updated || 0).toLocaleString()}</span><span>updated</span></div>
-        <div class="bf-summary-row"><span class="bf-summary-num yellow">${(data.skipped || 0).toLocaleString()}</span><span>skipped (word not found in Yomitan)</span></div>
+        <div class="bf-summary-row"><span class="bf-summary-num green">${updated.toLocaleString()}</span><span>updated</span></div>
+        <div class="bf-summary-row"><span class="bf-summary-num blue">${skippedUnchanged.toLocaleString()}</span><span>skipped (already up-to-date)</span></div>
+        <div class="bf-summary-row"><span class="bf-summary-num yellow">${skippedNotFound.toLocaleString()}</span><span>skipped (word not found in Yomitan)</span></div>
         <div class="bf-summary-row">${errorNote}</div>
         ${bfState.detectedNoteType ? `<div class="bf-summary-row muted">${Array.from(bfState.selectedDecks).join(', ')} \u00b7 note type: ${bfState.detectedNoteType}</div>` : ''}
     `;
