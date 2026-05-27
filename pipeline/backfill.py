@@ -159,9 +159,9 @@ def get_yomitan_markers() -> list[str]:
 
 _debug_logged_first = False  # Log full request/response for first word only
 
-def lookup_word(word: str, reading: str = '', include_media: bool = True, max_retries: int = 3, markers: list[str] = None) -> Optional[dict]:
+def lookup_word(word: str, reading: str = '', include_media: bool = True, max_retries: int = 5, markers: list[str] = None) -> Optional[dict]:
     """
-    Call Yomitan API POST /ankiFields.
+    Call Yomitan API POST /ankiFields with robust automatic retries.
     Returns the FULL response dict (including 'fields', 'audioMedia', 'dictionaryMedia'),
     or None if not found / error.
     """
@@ -221,7 +221,8 @@ def lookup_word(word: str, reading: str = '', include_media: bool = True, max_re
             return data
             
         except Exception as e:
-            time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+            # Sockets can be exhausted under concurrency, wait 1.0s, 2.0s, 3.0s... to let Yomitan breathe
+            time.sleep(1.0 * (attempt + 1))
             if attempt == max_retries - 1:
                 if not _debug_logged_first:
                     _debug_logged_first = True
@@ -1148,9 +1149,10 @@ def run_backfill(
             
             return (word_str, new_fields if new_fields else None)
 
-        # Audio/image: cap at 5 workers (Yomitan API can be overwhelmed by too many concurrent media requests).
-        # Text-only: up to 20 workers — API handles concurrent text lookups well.
-        workers = min(5, total_unique) if (audio_needed or image_needed) else min(20, total_unique)
+        # Concurrency Tuning: Browser background page socket queues limit concurrent TCP connections to 6.
+        # Audio/image: cap at 3 concurrent workers (heavy media file downloads).
+        # Text-only: cap at 6 concurrent workers (perfect match with standard browser connection limit).
+        workers = min(3, total_unique) if (audio_needed or image_needed) else min(6, total_unique)
         workers = max(1, workers)
         log.info(f'[backfill] Using {workers} worker threads (audio_needed={audio_needed}, image_needed={image_needed})')
         
