@@ -479,8 +479,8 @@ def _clean_yomitan_html(html: str) -> str:
 
 def _extract_single_glossary_by_kebab(glossary_html: str, dict_kebab: str) -> Optional[str]:
     """
-    Fallback parser that extracts a specific dictionary's glossary from the full glossary HTML
-    by matching the kebab-case version of its data-dictionary attribute.
+    Fallback parser that extracts ALL matching definitions for a specific dictionary from the full glossary HTML,
+    and merges them into a single clean div block with horizontal dividers.
     """
     if not glossary_html:
         return None
@@ -498,29 +498,41 @@ def _extract_single_glossary_by_kebab(glossary_html: str, dict_kebab: str) -> Op
         html_clean = re.sub(r'\s*style="[^"]*"', '', html_clean)
         
         soup = BeautifulSoup(html_clean, _BS4_PARSER)
+        matching_lis = []
         for dict_li in soup.find_all('li', attrs={'data-dictionary': True}):
             dict_name = dict_li.get('data-dictionary', '')
             if to_kebab_case(dict_name) == dict_kebab:
-                # Found the target dictionary!
-                all_definitions = []
-                for child in list(dict_li.children):
-                    if child.name == 'i' and child.string and child.string.strip() == dict_name:
-                        continue
-                    if child.name == 'div' and child.get('data-sc-content') == 'attribution':
-                        continue
-                    all_definitions.append(child)
-                    
-                # Format into a clean flat list
-                new_soup = BeautifulSoup('<div style="text-align:left" class="yomitan-glossary"><ol></ol></div>', _BS4_PARSER)
-                ol_tag = new_soup.ol
-                for item in all_definitions:
-                    if item.name == 'li':
-                        ol_tag.append(item)
-                    else:
-                        li_wrap = new_soup.new_tag('li')
-                        li_wrap.append(item)
-                        ol_tag.append(li_wrap)
-                return str(new_soup)
+                matching_lis.append((dict_li, dict_name))
+                
+        if not matching_lis:
+            return None
+            
+        # Create a new BeautifulSoup tree for the merged glossary
+        new_soup = BeautifulSoup('<div style="text-align:left" class="yomitan-glossary"></div>', _BS4_PARSER)
+        outer_div = new_soup.div
+        
+        for idx, (dict_li, dict_name) in enumerate(matching_lis):
+            # Create a dict-content div for this entry
+            content_div = new_soup.new_tag('div')
+            content_div['class'] = 'dict-content'
+            
+            # Extract clean children
+            for child in list(dict_li.children):
+                if child.name == 'i' and child.string and child.string.strip() == dict_name:
+                    continue
+                if child.name == 'div' and child.get('data-sc-content') == 'attribution':
+                    continue
+                content_div.append(child)
+                
+            # If it's not the first entry, prepend a dashed divider
+            if idx > 0:
+                hr_tag = new_soup.new_tag('hr')
+                hr_tag['style'] = 'border: 0; border-top: 1px dashed #777; margin: 8px 0;'
+                outer_div.append(hr_tag)
+                
+            outer_div.append(content_div)
+            
+        return str(new_soup)
     except Exception as e:
         log.warning(f'[backfill] Fallback single glossary extraction failed: {e}')
     return None
@@ -633,19 +645,20 @@ def _render_field(handlebar: str, yomitan_data: dict) -> Optional[str]:
     # Yomitan API returns fields as direct keys without braces
     key = handlebar.strip('{}')
     
+    # For single-glossary-*, we ALWAYS use our custom extraction/merging logic
+    # to guarantee clean, merged dictionary entries formatted with custom CSS.
+    if key.startswith('single-glossary-'):
+        dict_kebab = key[len('single-glossary-'):]
+        glossary_html = yomitan_data.get('glossary')
+        if glossary_html:
+            return _extract_single_glossary_by_kebab(glossary_html, dict_kebab)
+            
     # Try native Yomitan Connect response first
     val = yomitan_data.get(key)
     if val is not None:
         return val
         
     # Custom/Fallback rendering logic:
-    if key.startswith('single-glossary-'):
-        # Extract dictionary kebab-name
-        dict_kebab = key[len('single-glossary-'):]
-        glossary_html = yomitan_data.get('glossary')
-        if glossary_html:
-            return _extract_single_glossary_by_kebab(glossary_html, dict_kebab)
-            
     if key.startswith('single-frequency-number-'):
         # Extract dictionary kebab-name
         dict_kebab = key[len('single-frequency-number-'):]
