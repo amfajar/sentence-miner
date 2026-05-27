@@ -10,7 +10,7 @@ Optimizations:
 4. Pre-strips styles via Regex to speed up BeautifulSoup parsing by 80%.
 5. Caches HTML glossary cleaning via @lru_cache.
 6. Instantly cancels queued futures when a Cancel Event is triggered.
-7. Adds custom '{single-glossary}' field mapping option.
+7. Discovers and supports dynamic '{single-glossary-*}' and '{single-frequency-number-*}' markers.
 """
 import base64
 import json
@@ -32,10 +32,7 @@ log = logging.getLogger('SentenceMiner.backfill')
 YOMITAN_BASE_URL = 'http://127.0.0.1:19633'
 CHUNK_SIZE = 150
 
-# All handlebar markers that the Yomitan API accepts.
-# These are the BARE names (no braces) as expected by POST /ankiFields.
-# The UI shows them with braces for clarity, but API calls use bare names.
-# Added 'single-glossary' to bare handlebar options
+# All standard handlebar markers that the Yomitan API accepts.
 HANDLEBAR_OPTIONS_BARE = [
     'expression',
     'furigana',
@@ -43,7 +40,6 @@ HANDLEBAR_OPTIONS_BARE = [
     'reading',
     'audio',
     'glossary',
-    'single-glossary',
     'glossary-brief',
     'glossary-first',
     'glossary-no-dictionary',
@@ -88,9 +84,82 @@ def check_yomitan() -> bool:
         log.info(f'[backfill] Yomitan check: failed -- {type(e).__name__}: {e}')
         return False
 
+def get_yomitan_markers() -> list[str]:
+    """
+    Dynamically discover all available single-glossary-* and single-frequency-number-* markers
+    by performing a few quick dummy lookups of common words in Yomitan.
+    """
+    if not check_yomitan():
+        return []
+        
+    common_words = ["する", "の", "a", "1", "日本"]
+    glossary_dicts = set()
+    frequency_dicts = set()
+    
+    # Run lookups for these common words to collect active dictionaries
+    for word in common_words:
+        try:
+            url = f'{YOMITAN_BASE_URL}/ankiFields'
+            request_body = {
+                'text': word,
+                'type': 'term',
+                'markers': ['glossary', 'frequencies'],
+                'maxEntries': 1,
+                'includeMedia': False,
+            }
+            resp = _session.post(url, json=request_body, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                fields = data.get('fields', [{}])[0]
+                
+                # 1. Parse glossary to find dictionary names
+                glossary_html = fields.get('glossary', '')
+                if glossary_html:
+                    soup = BeautifulSoup(glossary_html, _BS4_PARSER)
+                    for li in soup.find_all('li', attrs={'data-dictionary': True}):
+                        name = li.get('data-dictionary')
+                        if name:
+                            glossary_dicts.add(name.strip())
+                            
+                # 2. Parse frequencies to find frequency dictionary names
+                frequencies_html = fields.get('frequencies', '')
+                if frequencies_html:
+                    soup = BeautifulSoup(frequencies_html, _BS4_PARSER)
+                    for li in soup.find_all('li'):
+                        text = li.get_text()
+                        if ':' in text:
+                            parts = text.split(':', 1)
+                            name = parts[0].strip()
+                            # Remove typical Yomitan character markers like ㋕ (kana), 漢字, etc.
+                            name = re.sub(r'[\u32d0-\u32fe]', '', name).strip()
+                            if name:
+                                frequency_dicts.add(name)
+        except Exception as e:
+            log.warning(f"[backfill] Failed to scan dictionaries for word {word}: {e}")
+            
+    # Convert to kebab-case (mimicking Yomitan's internal template name generator)
+    def to_kebab_case(name: str) -> str:
+        s = name.lower()
+        # Remove punctuation like brackets, dots, parentheses
+        s = re.sub(r'[\[\]\.\(\)]', '', s)
+        # Replace spaces and underscores with hyphens
+        s = re.sub(r'[\s_]+', '-', s)
+        # Remove duplicate hyphens
+        s = re.sub(r'-+', '-', s)
+        return s.strip('-')
+        
+    markers = []
+    for d in sorted(glossary_dicts):
+        markers.append(f"single-glossary-{to_kebab_case(d)}")
+    for d in sorted(frequency_dicts):
+        markers.append(f"single-frequency-number-{to_kebab_case(d)}")
+        
+    log.info(f"[backfill] Dynamically discovered Yomitan markers: {markers}")
+    return markers
+
 _debug_logged_first = False  # Log full request/response for first word only
 
-def lookup_word(word: str, reading: str = '', include_media: bool = True, max_retries: int = 3) -> Optional[dict]:
+def lookup_word(word: str, reading: str = '', include_media: bool = True, max_retries: int = 3, markers: list[str] = None) -> Optional[dict]:
     """
     Call Yomitan API POST /ankiFields.
     Returns the FULL response dict (including 'fields', 'audioMedia', 'dictionaryMedia'),
@@ -100,11 +169,21 @@ def lookup_word(word: str, reading: str = '', include_media: bool = True, max_re
     
     url = f'{YOMITAN_BASE_URL}/ankiFields'
     
-    # Filter markers to send only what Yomitan supports.
-    # If single-glossary is needed, we must fetch glossary so we can extract it.
-    api_markers = [m for m in HANDLEBAR_OPTIONS_BARE if m != 'single-glossary']
-    if 'glossary' not in api_markers:
-        api_markers.append('glossary')
+    if not markers:
+        # Fallback to standard markers
+        api_markers = [m for m in HANDLEBAR_OPTIONS_BARE if m != 'single-glossary']
+        if 'glossary' not in api_markers:
+            api_markers.append('glossary')
+    else:
+        api_markers = list(markers)
+        # Ensure we request full 'glossary' if any single-glossary-* fallback is needed
+        has_single_glossary = any(m.startswith('single-glossary-') for m in api_markers)
+        if has_single_glossary and 'glossary' not in api_markers:
+            api_markers.append('glossary')
+        # Ensure we request full 'frequencies' if any single-frequency-number-* fallback is needed
+        has_single_frequency = any(m.startswith('single-frequency-number-') for m in api_markers)
+        if has_single_frequency and 'frequencies' not in api_markers:
+            api_markers.append('frequencies')
         
     request_body = {
         'text': word,
@@ -398,50 +477,87 @@ def _clean_yomitan_html(html: str) -> str:
         log.warning(f'[backfill] Failed to clean HTML: {e}')
         return html
 
-def _render_single_glossary(glossary_html: str) -> str:
+def _extract_single_glossary_by_kebab(glossary_html: str, dict_kebab: str) -> Optional[str]:
     """
-    Custom Feature: Extracts all dictionary definitions from Yomitan's glossary HTML
-    and merges them into a single clean flat list (without details/summary dropdowns).
+    Fallback parser that extracts a specific dictionary's glossary from the full glossary HTML
+    by matching the kebab-case version of its data-dictionary attribute.
     """
     if not glossary_html:
-        return ""
+        return None
+        
+    def to_kebab_case(name: str) -> str:
+        s = name.lower()
+        s = re.sub(r'[\[\]\.\(\)]', '', s)
+        s = re.sub(r'[\s_]+', '-', s)
+        s = re.sub(r'-+', '-', s)
+        return s.strip('-')
+        
     try:
-        # Pre-strip style blocks and inline style attributes using Regex
+        # Pre-strip styles
         html_clean = re.sub(r'<style\b[^>]*>([\s\S]*?)</style>', '', glossary_html)
         html_clean = re.sub(r'\s*style="[^"]*"', '', html_clean)
         
         soup = BeautifulSoup(html_clean, _BS4_PARSER)
-        
-        # Collect all children of dictionary list items, excluding headers/attribution
-        all_definitions = []
         for dict_li in soup.find_all('li', attrs={'data-dictionary': True}):
-            dict_name = dict_li.get('data-dictionary', 'Dictionary')
-            
-            # Find elements that aren't the label title
-            for child in list(dict_li.children):
-                if child.name == 'i' and child.string and child.string.strip() == dict_name:
-                    continue
-                # Also skip attribution
-                if child.name == 'div' and child.get('data-sc-content') == 'attribution':
-                    continue
-                all_definitions.append(child)
-                
-        # Create a new clean flat structure
-        new_soup = BeautifulSoup('<div style="text-align:left" class="yomitan-glossary"><ol></ol></div>', _BS4_PARSER)
-        ol_tag = new_soup.ol
-        
-        for item in all_definitions:
-            if item.name == 'li':
-                ol_tag.append(item)
-            else:
-                li_wrap = new_soup.new_tag('li')
-                li_wrap.append(item)
-                ol_tag.append(li_wrap)
-                
-        return str(new_soup)
+            dict_name = dict_li.get('data-dictionary', '')
+            if to_kebab_case(dict_name) == dict_kebab:
+                # Found the target dictionary!
+                all_definitions = []
+                for child in list(dict_li.children):
+                    if child.name == 'i' and child.string and child.string.strip() == dict_name:
+                        continue
+                    if child.name == 'div' and child.get('data-sc-content') == 'attribution':
+                        continue
+                    all_definitions.append(child)
+                    
+                # Format into a clean flat list
+                new_soup = BeautifulSoup('<div style="text-align:left" class="yomitan-glossary"><ol></ol></div>', _BS4_PARSER)
+                ol_tag = new_soup.ol
+                for item in all_definitions:
+                    if item.name == 'li':
+                        ol_tag.append(item)
+                    else:
+                        li_wrap = new_soup.new_tag('li')
+                        li_wrap.append(item)
+                        ol_tag.append(li_wrap)
+                return str(new_soup)
     except Exception as e:
-        log.warning(f'[backfill] Failed to render single glossary: {e}')
-        return glossary_html
+        log.warning(f'[backfill] Fallback single glossary extraction failed: {e}')
+    return None
+
+def _extract_single_frequency_by_kebab(frequencies_html: str, dict_kebab: str) -> Optional[str]:
+    """
+    Fallback parser to extract the frequency number for a specific dictionary from the raw frequencies HTML.
+    e.g., if dict_kebab is 'jiten', look for a list item that corresponds to 'jiten'.
+    """
+    if not frequencies_html:
+        return None
+        
+    def to_kebab_case(name: str) -> str:
+        s = name.lower()
+        s = re.sub(r'[\[\]\.\(\)]', '', s)
+        s = re.sub(r'[\s_]+', '-', s)
+        s = re.sub(r'-+', '-', s)
+        return s.strip('-')
+        
+    try:
+        # Pre-strip styles
+        html_clean = re.sub(r'<style\b[^>]*>([\s\S]*?)</style>', '', frequencies_html)
+        html_clean = re.sub(r'\s*style="[^"]*"', '', html_clean)
+        
+        soup = BeautifulSoup(html_clean, _BS4_PARSER)
+        for li in soup.find_all('li'):
+            text = li.get_text()
+            if ':' in text:
+                parts = text.split(':', 1)
+                name = parts[0].strip()
+                # Remove typical Yomitan character markers like ㋕ (kana), 漢字, etc.
+                name = re.sub(r'[\u32d0-\u32fe]', '', name).strip()
+                if to_kebab_case(name) == dict_kebab:
+                    return parts[1].strip()
+    except Exception as e:
+        log.warning(f'[backfill] Fallback single frequency extraction failed: {e}')
+    return None
 
 @lru_cache(maxsize=1024)
 def _clean_yomitan_html_cached(html: str) -> str:
@@ -449,13 +565,6 @@ def _clean_yomitan_html_cached(html: str) -> str:
     Thread-safe cached wrapper for HTML cleaning.
     """
     return _clean_yomitan_html(html)
-
-@lru_cache(maxsize=1024)
-def _render_single_glossary_cached(html: str) -> str:
-    """
-    Thread-safe cached wrapper for single glossary rendering.
-    """
-    return _render_single_glossary(html)
 
 def _write_yomitan_media(
     yomitan_response: dict,
@@ -523,10 +632,28 @@ def _render_field(handlebar: str, yomitan_data: dict) -> Optional[str]:
         return None
     # Yomitan API returns fields as direct keys without braces
     key = handlebar.strip('{}')
-    if key == 'single-glossary':
+    
+    # Try native Yomitan Connect response first
+    val = yomitan_data.get(key)
+    if val is not None:
+        return val
+        
+    # Custom/Fallback rendering logic:
+    if key.startswith('single-glossary-'):
+        # Extract dictionary kebab-name
+        dict_kebab = key[len('single-glossary-'):]
         glossary_html = yomitan_data.get('glossary')
-        return _render_single_glossary_cached(glossary_html) if glossary_html else None
-    return yomitan_data.get(key)
+        if glossary_html:
+            return _extract_single_glossary_by_kebab(glossary_html, dict_kebab)
+            
+    if key.startswith('single-frequency-number-'):
+        # Extract dictionary kebab-name
+        dict_kebab = key[len('single-frequency-number-'):]
+        frequencies_html = yomitan_data.get('frequencies')
+        if frequencies_html:
+            return _extract_single_frequency_by_kebab(frequencies_html, dict_kebab)
+            
+    return None
 
 def run_backfill(
     ankiconnect_url: str,
@@ -661,11 +788,15 @@ def run_backfill(
         updates_by_note_id = {}
         current_notes_processed = skipped  # start with already skipped
         
+        # Pre-compute mapped markers (bare options) so we only fetch what is actually requested
+        mapped_markers = {v.strip('{}') for v in field_mapping.values() if v and v != 'none'}
+        
         def process_unique_word(word_str, data):
             yomitan_data = lookup_word(
                 word_str, 
                 data['reading'], 
-                include_media=(audio_needed or image_needed)
+                include_media=(audio_needed or image_needed),
+                markers=list(mapped_markers)
             )
             if not yomitan_data:
                 return (word_str, None)

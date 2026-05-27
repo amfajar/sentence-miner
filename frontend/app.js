@@ -1152,7 +1152,7 @@ const bfState = {
     isPaused: false,
 };
 
-const HANDLEBAR_OPTIONS = [
+let HANDLEBAR_OPTIONS = [
     'none',
     '{expression}',
     '{furigana}',
@@ -1160,7 +1160,6 @@ const HANDLEBAR_OPTIONS = [
     '{reading}',
     '{audio}',
     '{glossary}',
-    '{single-glossary}',
     '{glossary-brief}',
     '{glossary-first}',
     '{glossary-no-dictionary}',
@@ -1179,6 +1178,61 @@ const HANDLEBAR_OPTIONS = [
     '{part-of-speech}',
 ];
 
+function rebuildHandlebarOptions(dynamicMarkers = []) {
+    const list = [
+        'none',
+        '{expression}',
+        '{furigana}',
+        '{furigana-plain}',
+        '{reading}',
+        '{audio}',
+        '{glossary}',
+    ];
+
+    const dynamicBraced = dynamicMarkers.map(m => `{${m}}`);
+    
+    // Merge any saved mappings that are not already present (offline / saved compatibility fallback)
+    const saved = [];
+    if (bfState.savedMappings) {
+        for (const noteType in bfState.savedMappings) {
+            const mapping = bfState.savedMappings[noteType];
+            for (const field in mapping) {
+                const val = mapping[field];
+                if (val && (val.startsWith('{single-glossary-') || val.startsWith('{single-frequency-number-'))) {
+                    if (!dynamicBraced.includes(val) && !saved.includes(val)) {
+                        saved.push(val);
+                    }
+                }
+            }
+        }
+    }
+    
+    const allDynamic = [...dynamicBraced, ...saved].sort();
+    list.push(...allDynamic);
+
+    const remaining = [
+        '{glossary-brief}',
+        '{glossary-first}',
+        '{glossary-no-dictionary}',
+        '{pitch-accent-positions}',
+        '{pitch-accent-categories}',
+        '{pitch-accent-graphs}',
+        '{pitch-accent-graphs-jj}',
+        '{frequencies}',
+        '{frequency-harmonic-rank}',
+        '{frequency-average-rank}',
+        '{popup-selection-text}',
+        '{sentence}',
+        '{sentence-furigana}',
+        '{sentence-furigana-plain}',
+        '{tags}',
+        '{part-of-speech}'
+    ];
+    list.push(...remaining);
+
+    HANDLEBAR_OPTIONS = list;
+}
+
 // Called every time user navigates to the Backfill tab
 async function initBackfillTab() {
     // Load saved mappings first (fast, local)
@@ -1187,6 +1241,9 @@ async function initBackfillTab() {
         bfState.savedMappings = res.mappings || {};
         bfState.savedConfig = res.config || {};
     }
+
+    // Pre-populate handlebars using saved mappings (in case Yomitan is offline)
+    rebuildHandlebarOptions([]);
 
     // Refresh mapping preview
     refreshMappingPreview();
@@ -1243,6 +1300,32 @@ async function checkYomitan() {
         } else {
             statusEl.className = 'bf-yomitan-status error';
             statusEl.innerHTML = '<div class="status-dot"></div> Yomitan API: Disconnected';
+        }
+    }
+
+    // Dynamically fetch and build markers if Yomitan is online
+    if (bfState.yomitanOk) {
+        try {
+            const markerRes = await window.pywebview.api.get_yomitan_markers();
+            if (markerRes.ok && markerRes.markers && markerRes.markers.length > 0) {
+                rebuildHandlebarOptions(markerRes.markers);
+            } else {
+                rebuildHandlebarOptions([]);
+            }
+        } catch (err) {
+            console.error('Failed to get Yomitan markers:', err);
+            rebuildHandlebarOptions([]);
+        }
+    } else {
+        rebuildHandlebarOptions([]);
+    }
+
+    // Re-render the mapping table if configure mode is visible
+    const configureModeVisible = !document.getElementById('bf-configure-mode').classList.contains('hidden');
+    if (configureModeVisible) {
+        const noteType = bfState.detectedNoteType || (Object.keys(bfState.savedMappings).length > 0 ? Object.keys(bfState.savedMappings)[0] : '');
+        if (noteType) {
+            renderMappingTable(noteType);
         }
     }
 

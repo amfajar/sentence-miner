@@ -1407,6 +1407,14 @@ class Api:
             return {'ok': ok, 'url': url}
         except Exception as e:
             return {'ok': False, 'url': url, 'error': str(e)}
+    def get_yomitan_markers(self) -> dict:
+        """Query Yomitan to dynamically discover available single-glossary-* and single-frequency-number-* markers."""
+        try:
+            markers = backfill_module.get_yomitan_markers()
+            return {'ok': True, 'markers': markers}
+        except Exception as e:
+            log.error(f'[api] get_yomitan_markers error: {e}')
+            return {'ok': False, 'error': str(e), 'markers': []}
     def get_backfill_settings(self) -> dict:
         """
         Return saved backfill settings from settings.json.
