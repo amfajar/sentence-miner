@@ -189,7 +189,7 @@ def lookup_word(word: str, reading: str = '', include_media: bool = True, max_re
         'text': word,
         'type': 'term',
         'markers': api_markers,
-        'maxEntries': 1,
+        'maxEntries': 10,
         'includeMedia': include_media,
     }
     if reading:
@@ -218,6 +218,34 @@ def lookup_word(word: str, reading: str = '', include_media: bool = True, max_re
             fields_list = data.get('fields') if isinstance(data, dict) else None
             if not fields_list or not isinstance(fields_list, list):
                 return None
+                
+            # Precision Reading Matching: If a reading is provided and there are multiple entries,
+            # rearrange so the one matching the reading exactly is placed first.
+            if reading and len(fields_list) > 1:
+                def normalize(r: str) -> str:
+                    chars = []
+                    for c in r.strip():
+                        code = ord(c)
+                        if 0x30a1 <= code <= 0x30f6:
+                            chars.append(chr(code - 0x60))
+                        else:
+                            chars.append(c)
+                    return "".join(chars)
+                
+                norm_reading = normalize(reading)
+                matched_entry = None
+                for entry in fields_list:
+                    entry_reading = entry.get('reading', '')
+                    if isinstance(entry_reading, str) and normalize(entry_reading) == norm_reading:
+                        matched_entry = entry
+                        break
+                        
+                if matched_entry:
+                    fields_list = list(fields_list)
+                    fields_list.remove(matched_entry)
+                    fields_list.insert(0, matched_entry)
+                    data['fields'] = fields_list
+                    
             return data
             
         except Exception as e:
@@ -1100,9 +1128,10 @@ def run_backfill(
                 reading_field_data = fields.get(reading_field, {})
                 reading = reading_field_data.get('value', '').strip() if isinstance(reading_field_data, dict) else ''
                 
-            if word not in unique_expressions:
-                unique_expressions[word] = {'reading': reading, 'note_ids': []}
-            unique_expressions[word]['note_ids'].append(note_id)
+            key = (word, reading)
+            if key not in unique_expressions:
+                unique_expressions[key] = {'reading': reading, 'note_ids': []}
+            unique_expressions[key]['note_ids'].append(note_id)
 
         unique_words = list(unique_expressions.keys())
         total_unique = len(unique_words)
@@ -1124,10 +1153,11 @@ def run_backfill(
                     exclude_dicts.append(val_clean[len('single-glossary-'):])
         exclude_dicts_tuple = tuple(exclude_dicts)
         
-        def process_unique_word(word_str, data):
+        def process_unique_word(key_tuple, data):
+            word_str, reading_str = key_tuple
             yomitan_data = lookup_word(
                 word_str, 
-                data['reading'], 
+                reading_str, 
                 include_media=(audio_needed or image_needed),
                 markers=list(mapped_markers)
             )
