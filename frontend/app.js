@@ -1160,6 +1160,7 @@ const HANDLEBAR_OPTIONS = [
     '{reading}',
     '{audio}',
     '{glossary}',
+    '{single-glossary}',
     '{glossary-brief}',
     '{glossary-first}',
     '{glossary-no-dictionary}',

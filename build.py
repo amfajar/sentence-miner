@@ -43,14 +43,14 @@ def _copy_binary_to_bin(name: str) -> bool:
         print(f"  [ok] Copied {name} from {src}")
         return True
 
-    print(f"  [!!] {name} not found in PATH and not in bin/ — it won't be bundled.")
+    print(f"  [!!] {name} not found in PATH and not in bin/ - it won't be bundled.")
     print(f"       Manually copy {name} to: {dest}")
     return False
 
 
 def main():
     print("=" * 60)
-    print("  SentenceMiner — PyInstaller Build")
+    print("  SentenceMiner - PyInstaller Build")
     print("=" * 60)
 
     # -- Step 1: Prepare bin/ ----------------------------------------

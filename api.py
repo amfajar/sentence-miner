@@ -51,7 +51,21 @@ def _best_reading(jitendex_db, freq_db, lemma: str, sudachi_reading: str) -> str
     """
     jitendex_readings = dictionary.lookup_all_readings(jitendex_db, lemma)  # all Jitendex readings, hiragana
     candidates = list(dict.fromkeys(filter(None, jitendex_readings + [sudachi_reading])))
-    return frequency.get_best_reading(freq_db, candidates) or sudachi_reading
+    
+    if not candidates:
+        return sudachi_reading
+    if freq_db is None or len(candidates) == 1:
+        return candidates[0]
+
+    best = candidates[0]
+    best_rank = 999999
+    for reading in candidates:
+        rank = frequency.get_rank(freq_db, lemma, reading)
+        if rank < best_rank:
+            best_rank = rank
+            best = reading
+            
+    return best or sudachi_reading
 
 
 def _parse_srt(srt_path: str, offset_ms: int, media_path: str, label: str) -> list[dict]:
@@ -721,7 +735,7 @@ class Api:
 
                 _t0 = time.perf_counter()
                 jitendex_word_reading = _best_reading(
-                    self._jitendex, self._freq_dict, lemma, token['reading']
+                    self._jitendex, self._freq_dict, lemma, token.get('lemma_reading', token['reading'])
                 )
                 defn = dictionary.lookup_for_reading(self._jitendex, lemma, jitendex_word_reading) or ''
                 _bt_dict_lookup += (time.perf_counter() - _t0) * 1000
@@ -909,13 +923,13 @@ class Api:
                     'modelName': s.note_type,
                     'fields': fields,
                     'tags': s.tags,
-                    'options': {'allowDuplicate': False, 'duplicateScope': 'deck'},
+                    'options': {'allowDuplicate': s.allow_duplicates, 'duplicateScope': 'deck'},
                 }
                 for _, _, _, fields in pending
             ]
             
             note_ids = []
-            BATCH_CHUNK_SIZE = 100
+            BATCH_CHUNK_SIZE = 150
             total_chunks = (len(note_dicts) + BATCH_CHUNK_SIZE - 1) // BATCH_CHUNK_SIZE
             _dt_batch_total = 0
             
@@ -1119,7 +1133,7 @@ class Api:
 
                 _t0 = time.perf_counter()
                 jitendex_word_reading = _best_reading(
-                    self._jitendex, self._freq_dict, lemma, token['reading']
+                    self._jitendex, self._freq_dict, lemma, token.get('lemma_reading', token['reading'])
                 )
                 t_reading += time.perf_counter() - _t0
 
@@ -1221,7 +1235,7 @@ class Api:
                 freq_fn=lambda c: frequency.get_best_reading(self._freq_dict, c),
             )
             jitendex_word_reading = _best_reading(
-                self._jitendex, self._freq_dict, lemma, token['reading']
+                self._jitendex, self._freq_dict, lemma, token.get('lemma_reading', token['reading'])
             )
 
             # Check for same-deck duplicate (catches different note types too)

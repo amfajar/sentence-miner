@@ -32,7 +32,8 @@ def _request(url: str, action: str, **params) -> any:
     if params:
         payload['params'] = params
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        # Timeout raised to 120s because adding chunks of 150 notes can legitimate take >10s on large decks/Anki 24+
+        response = requests.post(url, json=payload, timeout=120)
         response.raise_for_status()
         data = response.json()
         if data.get('error'):
@@ -426,5 +427,4 @@ def add_notes_batch(url: str, notes: list[dict]) -> list:
         result = _request(url, 'addNotes', notes=notes)
         return result if result is not None else [None] * len(notes)
     except Exception as e:
-        print(f'[anki] add_notes_batch failed: {e}')
-        return [None] * len(notes)
+        raise RuntimeError(f"AnkiConnect batch add request failed: {e}")
