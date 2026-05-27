@@ -230,150 +230,447 @@ def lookup_word(word: str, reading: str = '', include_media: bool = True, max_re
 
 _YOMITAN_PLUGIN_CSS = """
 /* ── Yomitan Glossary Dictionary Styles ── */
-/* ── Base ── */
-.yomitan-glossary { font-family: sans-serif; font-size: 14px; line-height: 1.6; color: var(--color-base-content); }
+/* ─────────────────────────────────────────
+   Kiku Theme Mapping for Yomitan
+───────────────────────────────────────── */
 
-/* ── Dropdown (Accordion) Details ── */
+.yomitan-glossary {
+  --yk-bg: var(--color-base-100, #1e1e1e);
+  --yk-bg2: var(--color-base-200, #252525);
+  --yk-border: var(--color-base-300, #333);
+  --yk-text: var(--color-base-content, #eaeaea);
+
+  --yk-primary: var(--color-primary, #8ab4f8);
+  --yk-primary-content: var(--color-primary-content, #ffffff);
+
+  font-family: sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+
+  color: var(--yk-text);
+  background: transparent;
+}
+
+/* ─────────────────────────────────────────
+   Dropdown (Accordion)
+───────────────────────────────────────── */
+
 .yomitan-glossary details.dict-group {
   margin-bottom: 8px;
-  background: var(--color-base-200);
-  border: 1px solid var(--color-base-300);
+
+  background: var(--yk-bg2);
+
+  border: 1px solid var(--yk-border);
   border-radius: var(--radius-box, 0.5rem);
+
   overflow: hidden;
 }
 
-/* ── Dictionary Label Summary (Clickable) ── */
+/* ─────────────────────────────────────────
+   Summary / Dropdown Header
+───────────────────────────────────────── */
+
 .yomitan-glossary details.dict-group > summary {
   padding: 10px 14px;
+
   font-size: 13px;
   font-weight: 700;
-  color: var(--color-primary);
-  background: color-mix(in srgb, var(--color-primary) 5%, var(--color-base-200));
+
+  color: var(--yk-primary);
+
+  background:
+    color-mix(
+      in srgb,
+      var(--yk-primary) 5%,
+      var(--yk-bg2)
+    );
+
   cursor: pointer;
   user-select: none;
-  list-style: none; /* Hide default arrow */
+  list-style: none;
+
   display: flex;
   align-items: center;
   justify-content: space-between;
+
   border-bottom: 1px solid transparent;
+
   transition: all 0.2s ease;
 }
+
 .yomitan-glossary details[open].dict-group > summary {
-  border-bottom-color: var(--color-base-300);
-  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-base-200));
+  border-bottom-color: var(--yk-border);
+
+  background:
+    color-mix(
+      in srgb,
+      var(--yk-primary) 10%,
+      var(--yk-bg2)
+    );
 }
 
-/* ── Custom Arrow Icon ── */
-.yomitan-glossary details.dict-group > summary::-webkit-details-marker { display: none; }
+/* ─────────────────────────────────────────
+   Custom Arrow
+───────────────────────────────────────── */
+
+.yomitan-glossary details.dict-group > summary::-webkit-details-marker {
+  display: none;
+}
+
 .yomitan-glossary details.dict-group > summary::after {
   content: "▼";
+
   font-size: 10px;
-  opacity: 0.6;
+
+  color: var(--yk-primary);
+
+  opacity: 0.7;
+
   transition: transform 0.2s ease;
 }
+
 .yomitan-glossary details[open].dict-group > summary::after {
   transform: rotate(-180deg);
 }
 
-/* ── Dictionary Content Area ── */
+/* ─────────────────────────────────────────
+   Dictionary Content
+───────────────────────────────────────── */
+
 .yomitan-glossary .dict-content {
   padding: 12px 14px;
+
+  color: var(--yk-text);
+
+  background: transparent;
 }
 
-/* ── Clean the old generic dictionary blocks ── */
+/* ─────────────────────────────────────────
+   Remove Default List Styles
+───────────────────────────────────────── */
+
 .yomitan-glossary li[data-dictionary] {
   list-style-type: none;
 }
+
 .yomitan-glossary li[data-dictionary] > i {
-  display: none; /* We show the title in the <summary> instead */
+  display: none;
 }
 
-/* ── Typography & List Spacing ── */
-.yomitan-glossary ul, .yomitan-glossary ol { margin: 0; padding-left: 0; list-style: none; }
-.yomitan-glossary li { margin-bottom: 8px; line-height: 1.6; }
-.yomitan-glossary li:last-child { margin-bottom: 0; }
+/* ─────────────────────────────────────────
+   Typography
+───────────────────────────────────────── */
 
-/* ── Sense Numbers (①, ❷, 1.) ── */
+.yomitan-glossary ul,
+.yomitan-glossary ol {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.yomitan-glossary li {
+  margin-bottom: 8px;
+  line-height: 1.6;
+
+  color: var(--yk-text);
+}
+
+.yomitan-glossary li:last-child {
+  margin-bottom: 0;
+}
+
+/* ─────────────────────────────────────────
+   Sense Numbers
+───────────────────────────────────────── */
+
 .yomitan-glossary [data-sc-num] {
   font-size: 13px;
   font-weight: 800;
-  color: var(--color-primary);
+
+  color: var(--yk-primary);
+
   opacity: 0.9;
+
   margin-right: 6px;
+
   display: inline-block;
+
   min-width: 18px;
 }
 
-/* ── Example Sentences (Dimmed and Indented) ── */
-.yomitan-glossary [data-sc-ex], .yomitan-glossary [data-sc-ex-g] {
+/* ─────────────────────────────────────────
+   Example Sentences
+───────────────────────────────────────── */
+
+.yomitan-glossary [data-sc-ex],
+.yomitan-glossary [data-sc-ex-g] {
   display: block;
+
   margin-top: 4px;
   margin-bottom: 8px;
   margin-left: 14px;
-  color: var(--color-base-content);
-  opacity: 0.7;
+
+  color: var(--yk-text);
+
+  opacity: 0.75;
+
   font-size: 0.95em;
-  border-left: 2px solid var(--color-primary);
-  border-left-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
+
+  border-left: 2px solid
+    color-mix(
+      in srgb,
+      var(--yk-primary) 40%,
+      transparent
+    );
+
   padding-left: 10px;
+
   font-style: italic;
 }
 
-/* ── Plain text entries (e.g. NHK, 新和英) clean line spacing ── */
-.yomitan-glossary li[data-dictionary="新和英"] { list-style: disc inside; padding-left: 8px; }
+/* ─────────────────────────────────────────
+   Tables
+───────────────────────────────────────── */
 
-/* ── 類語例解辞典 tables readable with borders ── */
 .yomitan-glossary li[data-dictionary="類語例解辞典"] table {
   border-collapse: collapse;
+
   width: 100%;
+
   margin-top: 8px;
+
   font-size: 13.5px;
 }
-.yomitan-glossary li[data-dictionary="類語例解辞典"] th, 
+
+.yomitan-glossary li[data-dictionary="類語例解辞典"] th,
 .yomitan-glossary li[data-dictionary="類語例解辞典"] td {
-  border: 1px solid var(--color-base-300);
+  border: 1px solid var(--yk-border);
+
   padding: 6px 8px;
+
+  color: var(--yk-text);
 }
+
 .yomitan-glossary li[data-dictionary="類語例解辞典"] th {
-  background: color-mix(in srgb, var(--color-base-300) 40%, transparent);
+  background:
+    color-mix(
+      in srgb,
+      var(--yk-border) 40%,
+      transparent
+    );
 }
-.yomitan-glossary [data-sc-name] { 
-  font-weight: 800; 
-  color: var(--color-primary);
-  margin-top: 8px; 
+
+/* ─────────────────────────────────────────
+   Dictionary Labels / Tags
+───────────────────────────────────────── */
+
+.yomitan-glossary [data-sc-name] {
+  font-weight: 800;
+
+  color: var(--yk-primary);
+
+  margin-top: 8px;
   margin-bottom: 4px;
-  display: inline-block; 
+
+  display: inline-block;
 }
 
-/* ── Pixiv footer hidden ── */
-.yomitan-glossary [data-sc-pixiv="footer"] { display: none !important; }
+/* ─────────────────────────────────────────
+   Pixiv Footer Hidden
+───────────────────────────────────────── */
 
-/* ── Dict Specific Layout Helpers ── */
+.yomitan-glossary [data-sc-pixiv="footer"] {
+  display: none !important;
+}
+
+/* ─────────────────────────────────────────
+   Layout Helpers
+───────────────────────────────────────── */
+
 .yomitan-glossary [data-sc-content="level1"],
 .yomitan-glossary [data-sc-content="L3"],
 .yomitan-glossary [data-sc-l3],
 .yomitan-glossary [data-sc-mg],
 .yomitan-glossary [data-sc-meaning],
-.yomitan-glossary [data-sc-head2] { display: block; margin-top: 4px; }
-.yomitan-glossary [data-sc-pixiv="parent-link"],
-.yomitan-glossary [data-sc-pixiv="summary"] { display: block; margin-bottom: 6px; }
+.yomitan-glossary [data-sc-head2] {
+  display: block;
+  margin-top: 4px;
+}
 
-/* ── Old Jitendex CSS (Adapted for cleaner look) ── */
-.yomitan-glossary ul[data-sc-content="sense-groups"] { list-style-type: none; padding-left: 0; margin-top: 0.4em; }
-.yomitan-glossary li[data-sc-content="sense-group"] { padding-left: 0; margin-bottom: 1em; }
-.yomitan-glossary li[data-sc-content="sense"] { padding-left: 4px; margin-bottom: 0.6em; }
-.yomitan-glossary ul[data-sc-content="glossary"] li { display: inline; margin-right: 0.5em; }
-.yomitan-glossary ul[data-sc-content="glossary"] li:not(:last-child)::after { content: "; "; color: var(--color-base-content); opacity: 0.6; }
-.yomitan-glossary span[data-sc-class="tag"] { border-radius: 4px; font-size: 0.75em; font-weight: 700; margin-right: 0.6em; padding: 0.2em 0.4em; vertical-align: baseline; word-break: keep-all; display: inline-block; line-height: 1; }
-.yomitan-glossary span[data-sc-content="part-of-speech-info"] { background-color: var(--color-secondary); color: var(--color-secondary-content); }
-.yomitan-glossary span[data-sc-content="misc-info"] { background-color: var(--color-accent); color: var(--color-accent-content); }
-.yomitan-glossary span[data-sc-content="field-info"] { background-color: var(--color-primary); color: var(--color-primary-content); }
-.yomitan-glossary div[data-sc-class="extra-box"] { border-radius: 6px; border-left: 3px solid var(--color-primary); margin: 0.6em 0; padding: 0.6em 0.8em; background: color-mix(in srgb, var(--color-base-content) 5%, transparent); font-size: 0.9em; }
-.yomitan-glossary div[data-sc-content="example-sentence-a"] { font-size: 1.05em; margin-bottom: 0.3em; font-style: italic; }
-.yomitan-glossary div[data-sc-content="example-sentence-b"] { font-size: 0.9em; color: var(--color-base-content); opacity: 0.7; }
-.yomitan-glossary span[data-sc-content="example-keyword"] { color: var(--color-primary); font-weight: bold; }
-.yomitan-glossary div[data-sc-content="attribution"] { display: none; }
-.yomitan-glossary div[data-sc-content="forms"] { margin-top: 0.5em; font-size: 0.85em; }
+.yomitan-glossary [data-sc-pixiv="parent-link"],
+.yomitan-glossary [data-sc-pixiv="summary"] {
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* ─────────────────────────────────────────
+   Glossary Inline Entries
+───────────────────────────────────────── */
+
+.yomitan-glossary ul[data-sc-content="sense-groups"] {
+  list-style-type: none;
+  padding-left: 0;
+  margin-top: 0.4em;
+}
+
+.yomitan-glossary li[data-sc-content="sense-group"] {
+  padding-left: 0;
+  margin-bottom: 1em;
+}
+
+.yomitan-glossary li[data-sc-content="sense"] {
+  padding-left: 4px;
+  margin-bottom: 0.6em;
+}
+
+.yomitan-glossary ul[data-sc-content="glossary"] li {
+  display: inline;
+  margin-right: 0.5em;
+}
+
+.yomitan-glossary ul[data-sc-content="glossary"] li:not(:last-child)::after {
+  content: "; ";
+
+  color: var(--yk-text);
+
+  opacity: 0.6;
+}
+
+/* ─────────────────────────────────────────
+   Info Tags
+───────────────────────────────────────── */
+
+.yomitan-glossary span[data-sc-class="tag"] {
+  border-radius: 4px;
+
+  font-size: 0.75em;
+  font-weight: 700;
+
+  margin-right: 0.6em;
+
+  padding: 0.2em 0.4em;
+
+  vertical-align: baseline;
+
+  word-break: keep-all;
+
+  display: inline-block;
+
+  line-height: 1;
+}
+
+.yomitan-glossary span[data-sc-content="part-of-speech-info"] {
+  background-color: var(--color-secondary);
+  color: var(--color-secondary-content);
+}
+
+.yomitan-glossary span[data-sc-content="misc-info"] {
+  background-color: var(--color-accent);
+  color: var(--color-accent-content);
+}
+
+.yomitan-glossary span[data-sc-content="field-info"] {
+  background-color: var(--yk-primary);
+  color: var(--yk-primary-content);
+}
+
+/* ─────────────────────────────────────────
+   Extra Boxes
+───────────────────────────────────────── */
+
+.yomitan-glossary div[data-sc-class="extra-box"] {
+  border-radius: 6px;
+
+  border-left: 3px solid var(--yk-primary);
+
+  margin: 0.6em 0;
+
+  padding: 0.6em 0.8em;
+
+  background:
+    color-mix(
+      in srgb,
+      var(--yk-text) 5%,
+      transparent
+    );
+
+  font-size: 0.9em;
+
+  color: var(--yk-text);
+}
+
+/* ─────────────────────────────────────────
+   Example Sentences
+───────────────────────────────────────── */
+
+.yomitan-glossary div[data-sc-content="example-sentence-a"] {
+  font-size: 1.05em;
+
+  margin-bottom: 0.3em;
+
+  font-style: italic;
+
+  color: var(--yk-text);
+}
+
+.yomitan-glossary div[data-sc-content="example-sentence-b"] {
+  font-size: 0.9em;
+
+  color: var(--yk-text);
+
+  opacity: 0.7;
+}
+
+.yomitan-glossary span[data-sc-content="example-keyword"] {
+  color: var(--yk-primary);
+
+  font-weight: bold;
+}
+
+/* ─────────────────────────────────────────
+   Hide Attribution
+───────────────────────────────────────── */
+
+.yomitan-glossary div[data-sc-content="attribution"] {
+  display: none;
+}
+
+.yomitan-glossary div[data-sc-content="forms"] {
+  margin-top: 0.5em;
+
+  font-size: 0.85em;
+
+  color: var(--yk-text);
+}
+
+/* ─────────────────────────────────────────
+   Pitch Accent Override (explicit per type)
+───────────────────────────────────────── */
+
+[data-pitch-type^="heiban"] {
+  --pitch-color: var(--yk-primary) !important;
+  --pitch-content-color: #ffffff;
+}
+
+[data-pitch-type^="atamadaka"] {
+  --pitch-color: var(--yk-primary) !important;
+  --pitch-content-color: #ffffff;
+}
+
+[data-pitch-type^="nakadaka"] {
+  --pitch-color: var(--yk-primary) !important;
+  --pitch-content-color: #ffffff;
+}
+
+[data-pitch-type^="odaka"] {
+  --pitch-color: var(--yk-primary) !important;
+  --pitch-content-color: #ffffff;
+}
+
+[data-pitch-type^="kifuku"] {
+  --pitch-color: var(--yk-primary) !important;
+  --pitch-content-color: #ffffff;
+}
 """
 
 def _write_plugin_css(anki_media_dir: str):
@@ -413,7 +710,7 @@ try:
 except ImportError:
     _BS4_PARSER = 'html.parser'
 
-def _clean_yomitan_html(html: str) -> str:
+def _clean_yomitan_html(html: str, exclude_dicts: tuple[str, ...] = ()) -> str:
     """
     Remove bloated <style> tags, inline style attributes, and attribution noise
     from Yomitan dictionary output so our custom CSS can apply cleanly.
@@ -432,18 +729,28 @@ def _clean_yomitan_html(html: str) -> str:
         # BS4 only processes the slimmed down HTML tree (extremely fast!)
         soup = BeautifulSoup(html_clean, _BS4_PARSER)
 
+        def to_kebab_case(name: str) -> str:
+            s = name.lower()
+            s = re.sub(r'[\[\]\.\(\)]', '', s)
+            s = re.sub(r'[\s_]+', '-', s)
+            s = re.sub(r'-+', '-', s)
+            return s.strip('-')
+
         # 3. Restructure Dictionary Entries into Dropdowns
         # Yomitan usually structures its dictionaries as <li data-dictionary="XYZ"> inside a <ul>.
         # We find each dict block and wrap it in <details> and <summary>
         for index, dict_li in enumerate(soup.find_all('li', attrs={'data-dictionary': True})):
             dict_name = dict_li.get('data-dictionary', 'Dictionary')
             
+            # Check if this dictionary should be excluded because it's mapped to a single-glossary field
+            if exclude_dicts and to_kebab_case(dict_name) in exclude_dicts:
+                dict_li.decompose()
+                continue
+                
             # Create the <details> wrapper
             details_tag = soup.new_tag('details')
             details_tag['class'] = 'dict-group'
-            # Always open the very first dictionary block by default
-            if index == 0:
-                details_tag['open'] = ''
+            # Note: All dropdowns are closed by default (no details_tag['open'] = ''!)
                 
             # Create the <summary> which acts as the clickable title
             summary_tag = soup.new_tag('summary')
@@ -572,11 +879,11 @@ def _extract_single_frequency_by_kebab(frequencies_html: str, dict_kebab: str) -
     return None
 
 @lru_cache(maxsize=1024)
-def _clean_yomitan_html_cached(html: str) -> str:
+def _clean_yomitan_html_cached(html: str, exclude_dicts: tuple[str, ...] = ()) -> str:
     """
     Thread-safe cached wrapper for HTML cleaning.
     """
-    return _clean_yomitan_html(html)
+    return _clean_yomitan_html(html, exclude_dicts)
 
 def _write_yomitan_media(
     yomitan_response: dict,
@@ -804,6 +1111,15 @@ def run_backfill(
         # Pre-compute mapped markers (bare options) so we only fetch what is actually requested
         mapped_markers = {v.strip('{}') for v in field_mapping.values() if v and v != 'none'}
         
+        # Pre-compute excluded single-glossary dictionaries
+        exclude_dicts = []
+        for val in field_mapping.values():
+            if val:
+                val_clean = val.strip('{}')
+                if val_clean.startswith('single-glossary-'):
+                    exclude_dicts.append(val_clean[len('single-glossary-'):])
+        exclude_dicts_tuple = tuple(exclude_dicts)
+        
         def process_unique_word(word_str, data):
             yomitan_data = lookup_word(
                 word_str, 
@@ -827,7 +1143,7 @@ def run_backfill(
                 rendered = _render_field(handlebar, fields_data)
                 if rendered is not None:
                     if isinstance(rendered, str) and 'class="yomitan-glossary"' in rendered:
-                        rendered = _clean_yomitan_html_cached(rendered)
+                        rendered = _clean_yomitan_html_cached(rendered, exclude_dicts_tuple)
                     new_fields[anki_field] = rendered
             
             return (word_str, new_fields if new_fields else None)

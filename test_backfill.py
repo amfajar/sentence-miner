@@ -56,8 +56,22 @@ def test_multiple_glossary_merging():
     assert '<i>JMdict [2026-04-21]</i>' not in res, "Failed to strip redundant dictionary titles"
     print("SUCCESS: Multiple glossary merging test passed.")
 
+def test_glossary_exclusion_and_closure():
+    from pipeline.backfill import _clean_yomitan_html
+    fake_glossary = '''<ul>
+      <li data-dictionary="JMdict [2026-04-21]"><i>JMdict</i> <span>we</span></li>
+      <li data-dictionary="JIDict v.1.0.2"><i>JIDict</i> <span>we2</span></li>
+    </ul>'''
+    res_ex = _clean_yomitan_html(fake_glossary, ('jmdict-2026-04-21',))
+    
+    assert 'JMdict [2026-04-21]' not in res_ex, "Excluded dictionary was not removed!"
+    assert 'JIDict v.1.0.2' in res_ex, "Non-excluded dictionary was removed!"
+    assert 'open=' not in res_ex, "Dropdowns should be closed by default!"
+    print("SUCCESS: Glossary exclusion and accordion closure test passed.")
+
 if __name__ == '__main__':
     test_yomitan_cleaning()
     test_frequency_extraction()
     test_multiple_glossary_merging()
+    test_glossary_exclusion_and_closure()
     print("\nALL TESTS PASSED SUCCESSFULLY.")
