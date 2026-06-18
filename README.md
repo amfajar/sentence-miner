@@ -4,7 +4,7 @@ A high-performance, modern desktop application designed for **Japanese sentence 
 
 > [!NOTE]
 > ### 🌌 Vibe Coding Disclaimer
-> This project is a product of **Vibe Coding** — built in flow state with the assistance of advanced agentic AI systems. It is fully featured, highly optimized, and runs with great performance, but maintains a relaxed, flow-driven architecture. Use it with good vibes!
+> This project is a product of **Vibe Coding**
 
 ---
 
